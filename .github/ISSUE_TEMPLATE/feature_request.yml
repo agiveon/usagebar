@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an improvement or a new provider.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New provider (a service to monitor)
+        - UI / UX improvement
+        - Behavior / policy change (thresholds, poll interval, …)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to see?
+      description: |
+        For a new provider, please also link a working open-source implementation that hits the usage endpoint — QuotaBar's rule is that endpoints get cross-checked against a reference, not guessed. See NOTICE.md for existing examples.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: What problem does this solve for you?

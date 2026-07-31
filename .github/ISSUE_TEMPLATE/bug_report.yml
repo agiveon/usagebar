@@ -1,0 +1,56 @@
+name: Bug report
+description: Something is misbehaving in the menu bar app.
+labels: [bug]
+body:
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Which provider is affected?
+      options:
+        - Claude Code
+        - Codex / ChatGPT
+        - Cursor
+        - GitHub Copilot
+        - App itself (not provider-specific)
+        - Multiple / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. 14.5 (Sonoma)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Include the exact text the popover shows for the affected provider row (e.g. "not signed in — …", "HTTP 401", "stale data").
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Sign in to <service> in <app>
+        2. Launch QuotaBar
+        3. …
+
+  - type: checkboxes
+    id: security_check
+    attributes:
+      label: Does this involve auth tokens, credentials, or PII?
+      description: If yes, please close this and email agiveon@gmail.com instead — see SECURITY.md.
+      options:
+        - label: No, none of the above. This report is safe to be public.
+          required: true

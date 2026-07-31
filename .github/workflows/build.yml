@@ -1,0 +1,33 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: swift build (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Debug build
+        run: swift build -c debug
+
+      - name: Release build + assemble .app
+        run: ./build.sh release
+
+      - name: Verify bundle
+        run: |
+          test -f .build/QuotaBar.app/Contents/MacOS/QuotaBar
+          test -f .build/QuotaBar.app/Contents/Info.plist
+          test -f .build/QuotaBar.app/Contents/Resources/Icons/claude.svg
+          test -f .build/QuotaBar.app/Contents/Resources/Icons/openai.svg
+          test -f .build/QuotaBar.app/Contents/Resources/Icons/cursor.svg
+          test -f .build/QuotaBar.app/Contents/Resources/Icons/githubcopilot.svg
+          file .build/QuotaBar.app/Contents/MacOS/QuotaBar
