@@ -75,7 +75,9 @@ enum ClaudeUsageParser {
         }
 
         var windows: [UsageWindow] = []
-        // Sort keys for deterministic order (five_hour first, then seven_day*).
+        var seenIDs = Set<String>()
+
+        // 1. Top-level fields — five_hour / seven_day / seven_day_<model>.
         for key in dict.keys.sorted(by: sortKey) {
             guard let entry = dict[key] as? [String: Any] else { continue }
             // Must have both utilization + resets_at to count as a window.
@@ -91,9 +93,57 @@ enum ClaudeUsageParser {
                 percentUsed: percent,
                 resetsAt: resetsAt
             ))
+            seenIDs.insert(key)
+        }
+
+        // 2. `limits[]` — model-scoped windows the API surfaces here rather
+        //    than at the top level (e.g. weekly_scoped for Fable/Sonnet/Opus
+        //    when they have their own cap).  Skip entries duplicating a
+        //    top-level field, skip inactive-and-nil ones.
+        if let limits = dict["limits"] as? [[String: Any]] {
+            for limit in limits {
+                guard let percent = numeric(limit["percent"]) else { continue }
+                let group = (limit["group"] as? String) ?? "custom"
+                let scope = limit["scope"] as? [String: Any]
+                let model = scope?["model"] as? [String: Any]
+                let modelName = model?["display_name"] as? String
+
+                // A limit is "scoped" iff it names a model.  Unscoped limits
+                // duplicate the top-level five_hour/seven_day we already saw.
+                guard let modelName else { continue }
+
+                let slug = modelName.lowercased()
+                    .replacingOccurrences(of: " ", with: "_")
+                let id = "\(group)_\(slug)"
+                if seenIDs.contains(id) { continue }
+
+                let resetsAt = (limit["resets_at"] as? String).flatMap(parseDate)
+                windows.append(UsageWindow(
+                    id: id,
+                    label: label(group: group, model: modelName),
+                    percentUsed: max(0, percent / 100.0),
+                    resetsAt: resetsAt
+                ))
+                seenIDs.insert(id)
+            }
         }
 
         return windows
+    }
+
+    private static func numeric(_ any: Any?) -> Double? {
+        if let d = any as? Double { return d }
+        if let i = any as? Int    { return Double(i) }
+        if let n = any as? NSNumber { return n.doubleValue }
+        return nil
+    }
+
+    private static func label(group: String, model: String) -> String {
+        switch group {
+        case "session", "five_hour": return "Session · \(model)"
+        case "weekly", "seven_day":  return "Weekly · \(model)"
+        default:                     return "\(prettify(group)) · \(model)"
+        }
     }
 
     // five_hour before seven_day, then alphabetical within a group so
