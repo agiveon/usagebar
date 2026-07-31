@@ -16,7 +16,7 @@
 ## Test plan
 
 - [ ] `./build.sh release` succeeds.
-- [ ] `open .build/QuotaBar.app` — the affected provider shows the right
+- [ ] `open .build/UsageBar.app` — the affected provider shows the right
       windows / colors / reset countdowns.
 - [ ] No regressions in the other providers (menu bar glyph, popover,
       Settings toggles).

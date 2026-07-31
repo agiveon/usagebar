@@ -2,7 +2,7 @@
 
 ## Threat model
 
-QuotaBar reads locally-stored auth material (OAuth tokens, JWTs, OS
+UsageBar reads locally-stored auth material (OAuth tokens, JWTs, OS
 Keychain entries) belonging to services you're already signed into, sends
 them straight to those services' own API hosts over HTTPS, and drops them.
 It never persists tokens itself. Anything that violates this contract is
@@ -31,7 +31,7 @@ timeline with you.
 
 ## Auth material handled
 
-For transparency, here's every file / keychain item / DB QuotaBar reads,
+For transparency, here's every file / keychain item / DB UsageBar reads,
 and what it does with the contents:
 
 | Source | Read every | Kept in memory | Written anywhere |
@@ -42,7 +42,7 @@ and what it does with the contents:
 | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (copied read-only, WAL-immutable) | poll | duration of one HTTP request | never |
 | `~/.config/github-copilot/apps.json` / `hosts.json` | poll | duration of one HTTP request | never |
 
-Preferences stored under `com.magicmirrorsecurity.quotabar` in
+Preferences stored under `com.magicmirrorsecurity.usagebar` in
 `UserDefaults` are non-sensitive: which providers are enabled, refresh
 interval, which window drives the menu bar glyph.
 

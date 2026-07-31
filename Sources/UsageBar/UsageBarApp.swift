@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct QuotaBarApp: App {
+struct UsageBarApp: App {
     @StateObject private var store = UsageStore(registry: ProviderRegistry.default)
 
     var body: some Scene {

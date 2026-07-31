@@ -1,11 +1,11 @@
-# QuotaBar
+# UsageBar
 
 > A tiny macOS menu bar app that shows how much of your AI-coding quota
 > you've burned — green / yellow / red at a glance, with a click-through
 > breakdown per provider.
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="QuotaBar popover showing Claude Code windows with progress bars and reset countdowns" width="360">
+  <img src="docs/screenshot.png" alt="UsageBar popover showing Claude Code windows with progress bars and reset countdowns" width="360">
 </p>
 
 Runs alongside the CLIs and editors you already use. **Never asks you for an
@@ -58,8 +58,8 @@ store keeps a *disabled* list, not an enabled one.
 ```bash
 git clone https://github.com/agiveon/usagebar.git
 cd usagebar
-./build.sh release          # produces .build/QuotaBar.app
-open .build/QuotaBar.app
+./build.sh release          # produces .build/UsageBar.app
+open .build/UsageBar.app
 ```
 
 Look for a colored brand icon in the menu bar. On first poll, Claude's
@@ -68,7 +68,7 @@ polls are silent.
 
 ## Privacy
 
-QuotaBar is deliberately quiet about your data:
+UsageBar is deliberately quiet about your data:
 
 - Auth tokens are **read fresh on every poll and never cached** — nothing
   sensitive is written to disk by this app.
@@ -94,11 +94,11 @@ Right-click / left-click the icon → **Settings** (gear):
 ## Adding a provider
 
 Every provider is a single Swift file conforming to
-[`UsageProvider`](Sources/QuotaBar/Providers/UsageProvider.swift): give it an
+[`UsageProvider`](Sources/UsageBar/Providers/UsageProvider.swift): give it an
 `id`, a `displayName`, an `iconAsset` (bundled SVG) or `iconName` (SF
 Symbol), a `signInAction`, and two methods — `isAvailable()` and
 `fetchSnapshot() -> UsageSnapshot`. Register it in
-[`ProviderRegistry.default`](Sources/QuotaBar/Providers/ProviderRegistry.swift)
+[`ProviderRegistry.default`](Sources/UsageBar/Providers/ProviderRegistry.swift)
 and it appears in the Settings pane, the popover, and the menu-bar picker
 with no further wiring.
 
@@ -107,7 +107,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the walk-through.
 ## Not affiliated with
 
 Anthropic, OpenAI, Cursor Inc., GitHub / Microsoft, or WorkOS. The brand
-marks in [Sources/QuotaBar/Resources/Icons](Sources/QuotaBar/Resources/Icons)
+marks in [Sources/UsageBar/Resources/Icons](Sources/UsageBar/Resources/Icons)
 belong to their respective owners; they're bundled here purely to identify
 the corresponding service in the UI.
 

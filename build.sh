@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build a QuotaBar.app bundle from the SwiftPM executable.
+# Build a UsageBar.app bundle from the SwiftPM executable.
 # Usage: ./build.sh [debug|release]  (default: release)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${1:-release}"
-APP_NAME="QuotaBar"
+APP_NAME="UsageBar"
 BUILD_DIR=".build"
 APP_DIR="$BUILD_DIR/${APP_NAME}.app"
 
@@ -29,7 +29,7 @@ printf 'APPL????' > "$APP_DIR/Contents/PkgInfo"
 
 # Brand SVGs → Contents/Resources/Icons/  (loaded by BrandIcon.swift)
 mkdir -p "$APP_DIR/Contents/Resources/Icons"
-cp Sources/QuotaBar/Resources/Icons/*.svg "$APP_DIR/Contents/Resources/Icons/" 2>/dev/null || true
+cp Sources/UsageBar/Resources/Icons/*.svg "$APP_DIR/Contents/Resources/Icons/" 2>/dev/null || true
 
 echo "→ done: $APP_DIR"
 echo "   run with:  open $APP_DIR"

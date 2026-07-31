@@ -43,7 +43,7 @@ body:
       label: Steps to reproduce
       placeholder: |
         1. Sign in to <service> in <app>
-        2. Launch QuotaBar
+        2. Launch UsageBar
         3. …
 
   - type: checkboxes

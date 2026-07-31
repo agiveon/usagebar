@@ -8,8 +8,8 @@ Thanks for looking — small, focused patches are very welcome.
 git clone https://github.com/agiveon/usagebar.git
 cd usagebar
 swift build          # incremental dev build
-./build.sh debug     # assemble .build/QuotaBar.app
-open .build/QuotaBar.app
+./build.sh debug     # assemble .build/UsageBar.app
+open .build/UsageBar.app
 ```
 
 Requirements: macOS 13+, Xcode Command Line Tools with Swift 5.9+. No
@@ -18,8 +18,8 @@ third-party packages, no Xcode project — everything is SwiftPM.
 ## Project layout
 
 ```
-Sources/QuotaBar/
-  QuotaBarApp.swift          — @main, MenuBarExtra scene
+Sources/UsageBar/
+  UsageBarApp.swift          — @main, MenuBarExtra scene
   Models/                    — UsageWindow, UsageSnapshot, ProviderStatus
   Providers/                 — UsageProvider protocol + one file per service
   Store/UsageStore.swift     — @MainActor store, polling, prefs
@@ -31,7 +31,7 @@ Sources/QuotaBar/
 ## Adding a new provider
 
 Every provider is one file. Copy an existing one
-(e.g. [`CopilotProvider.swift`](Sources/QuotaBar/Providers/CopilotProvider.swift))
+(e.g. [`CopilotProvider.swift`](Sources/UsageBar/Providers/CopilotProvider.swift))
 and edit:
 
 1. Confirm the endpoint against a working open-source reference — **don't
@@ -47,7 +47,7 @@ and edit:
 3. If auth requires reading a Chromium cookie DB or a VS Code-style
    `state.vscdb`, reuse the helpers under `Support/`.
 4. Register it in
-   [`ProviderRegistry.default`](Sources/QuotaBar/Providers/ProviderRegistry.swift).
+   [`ProviderRegistry.default`](Sources/UsageBar/Providers/ProviderRegistry.swift).
 5. Add a `notAvailableHint` case in `UsageStore.notAvailableHint(for:)`.
 
 That's it — the Settings toggles, popover row, menu-bar picker, and
@@ -63,7 +63,7 @@ sign-in button all pick it up automatically.
   off the main actor; `UsageStore.fetch` already does this via
   `Task.detached`.
 - Shell subprocesses (`security`, etc.) must use
-  [`ShellRunner`](Sources/QuotaBar/Support/ShellRunner.swift) with a
+  [`ShellRunner`](Sources/UsageBar/Support/ShellRunner.swift) with a
   hard timeout — never `waitUntilExit()` without one.
 
 ## Style

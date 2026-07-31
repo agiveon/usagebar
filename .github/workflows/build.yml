@@ -24,10 +24,10 @@ jobs:
 
       - name: Verify bundle
         run: |
-          test -f .build/QuotaBar.app/Contents/MacOS/QuotaBar
-          test -f .build/QuotaBar.app/Contents/Info.plist
-          test -f .build/QuotaBar.app/Contents/Resources/Icons/claude.svg
-          test -f .build/QuotaBar.app/Contents/Resources/Icons/openai.svg
-          test -f .build/QuotaBar.app/Contents/Resources/Icons/cursor.svg
-          test -f .build/QuotaBar.app/Contents/Resources/Icons/githubcopilot.svg
-          file .build/QuotaBar.app/Contents/MacOS/QuotaBar
+          test -f .build/UsageBar.app/Contents/MacOS/UsageBar
+          test -f .build/UsageBar.app/Contents/Info.plist
+          test -f .build/UsageBar.app/Contents/Resources/Icons/claude.svg
+          test -f .build/UsageBar.app/Contents/Resources/Icons/openai.svg
+          test -f .build/UsageBar.app/Contents/Resources/Icons/cursor.svg
+          test -f .build/UsageBar.app/Contents/Resources/Icons/githubcopilot.svg
+          file .build/UsageBar.app/Contents/MacOS/UsageBar

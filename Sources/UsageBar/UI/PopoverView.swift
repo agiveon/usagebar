@@ -52,7 +52,7 @@ private struct MainView: View {
 
     private var header: some View {
         HStack {
-            Text("QuotaBar").font(.headline)
+            Text("UsageBar").font(.headline)
             Spacer()
             if let updated = store.lastUpdatedText {
                 Text(updated).font(.caption).foregroundStyle(.secondary)

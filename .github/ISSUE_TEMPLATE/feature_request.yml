@@ -19,7 +19,7 @@ body:
     attributes:
       label: What would you like to see?
       description: |
-        For a new provider, please also link a working open-source implementation that hits the usage endpoint — QuotaBar's rule is that endpoints get cross-checked against a reference, not guessed. See NOTICE.md for existing examples.
+        For a new provider, please also link a working open-source implementation that hits the usage endpoint — UsageBar's rule is that endpoints get cross-checked against a reference, not guessed. See NOTICE.md for existing examples.
     validations:
       required: true
 

@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "QuotaBar",
+    name: "UsageBar",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "QuotaBar", targets: ["QuotaBar"])
+        .executable(name: "UsageBar", targets: ["UsageBar"])
     ],
     targets: [
         .executableTarget(
-            name: "QuotaBar",
-            path: "Sources/QuotaBar"
+            name: "UsageBar",
+            path: "Sources/UsageBar"
         )
     ]
 )

@@ -26,7 +26,7 @@ struct CursorProvider: UsageProvider {
     )
 
     private let usageURL = URL(string: "https://cursor.com/api/usage-summary")!
-    private let userAgent = "quotabar/0.1"
+    private let userAgent = "usagebar/0.1"
 
     func isAvailable() async -> Bool {
         CursorCredentials.loadCookieValue() != nil

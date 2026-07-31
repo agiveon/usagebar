@@ -19,7 +19,7 @@ struct CopilotProvider: UsageProvider {
     )
 
     private let usageURL = URL(string: "https://api.github.com/copilot_internal/user")!
-    private let userAgent = "quotabar/0.1"
+    private let userAgent = "usagebar/0.1"
 
     func isAvailable() async -> Bool {
         CopilotCredentials.loadToken() != nil

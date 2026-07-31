@@ -1,10 +1,10 @@
-# PLAN.md — QuotaBar (working title)
+# PLAN.md — UsageBar (working title)
 
 A native macOS menu bar app that shows, at a glance, how much of your AI coding
 quota you've burned — with a traffic-light indicator (green / yellow / red) and
 the ability to switch between supported providers.
 
-> **Rename freely.** "QuotaBar" is a placeholder. Pick a final name before first
+> **Rename freely.** "UsageBar" is a placeholder. Pick a final name before first
 > release (avoid existing ones: Usagebar, CodexBar, cclimit, SessionWatcher).
 
 ---

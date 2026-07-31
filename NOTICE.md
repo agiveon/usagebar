@@ -2,7 +2,7 @@
 
 ## Endpoints & response schemas
 
-QuotaBar talks to undocumented usage endpoints. Rather than guess at the
+UsageBar talks to undocumented usage endpoints. Rather than guess at the
 shapes, we cross-checked each one against a working open-source
 implementation:
 
@@ -44,7 +44,7 @@ and response fields — no code was copied.
 ## Brand marks
 
 The SVG files under
-[`Sources/QuotaBar/Resources/Icons/`](Sources/QuotaBar/Resources/Icons)
+[`Sources/UsageBar/Resources/Icons/`](Sources/UsageBar/Resources/Icons)
 are the corresponding services' brand marks, used solely to identify the
 service in the UI (nominative fair use). All marks are trademarks of their
 respective owners:
