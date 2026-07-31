@@ -4,6 +4,10 @@
 > you've burned — green / yellow / red at a glance, with a click-through
 > breakdown per provider.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="QuotaBar popover showing Claude Code windows with progress bars and reset countdowns" width="360">
+</p>
+
 Runs alongside the CLIs and editors you already use. **Never asks you for an
 API key** — it reuses each service's existing sign-in (Keychain, the tool's
 own config file, or its state DB) and polls the same undocumented usage
