@@ -31,6 +31,10 @@ enum SignInAction: Sendable {
 protocol UsageProvider: Sendable {
     var id: String { get }
     var displayName: String { get }
+    /// One-word label used on the tab bar in the popover — short enough
+    /// that four of them fit across ~340 pt.  Defaults to the first
+    /// word of `displayName`.
+    var shortName: String { get }
     /// SF Symbol name — used as a fallback when the bundled SVG asset is
     /// missing (e.g. during a `swift run` dev launch that bypasses the .app).
     var iconName: String { get }
@@ -46,4 +50,8 @@ protocol UsageProvider: Sendable {
 
 extension UsageProvider {
     var iconAsset: String? { nil }
+    var shortName: String {
+        displayName.split(whereSeparator: { $0 == " " || $0 == "·" })
+            .first.map(String.init) ?? displayName
+    }
 }

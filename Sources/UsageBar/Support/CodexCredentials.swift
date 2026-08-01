@@ -1,9 +1,8 @@
 import Foundation
 
-// Reads the Codex CLI's sign-in from $CODEX_HOME/auth.json (default: ~/.codex).
-// For ChatGPT-signed-in accounts we need both the access_token and the
-// ChatGPT-Account-Id; API-key-only installs (OPENAI_API_KEY without `tokens`)
-// don't expose a usage endpoint, so we report that as "not available".
+// Reads the Codex CLI's sign-in from <configDir>/auth.json.  Default
+// configDir is $CODEX_HOME or ~/.codex.  Additional accounts get their
+// own dir (via `CODEX_HOME=~/.codex-work codex login`).
 enum CodexCredentials {
 
     struct Credentials {
@@ -11,10 +10,15 @@ enum CodexCredentials {
         let chatgptAccountId: String?
     }
 
-    static func load() -> Credentials? {
-        let dir = ProcessInfo.processInfo.environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 }
-            ?? ("~/.codex" as NSString).expandingTildeInPath
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("auth.json")
+    static var defaultConfigDir: String {
+        if let env = ProcessInfo.processInfo.environment["CODEX_HOME"], !env.isEmpty {
+            return env
+        }
+        return ("~/.codex" as NSString).expandingTildeInPath
+    }
+
+    static func load(configDir: String = CodexCredentials.defaultConfigDir) -> Credentials? {
+        let url = URL(fileURLWithPath: configDir).appendingPathComponent("auth.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -23,14 +27,11 @@ enum CodexCredentials {
               let access = tokens["access_token"] as? String, !access.isEmpty else {
             return nil
         }
-        // Prefer explicit account_id; fall back to decoding the JWT id_token.
         let accountId = (tokens["account_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? chatgptAccountIdFromIdToken(tokens: tokens)
         return Credentials(accessToken: access, chatgptAccountId: accountId)
     }
 
-    // id_token may be stored either as a raw JWT string or as a
-    // pre-decoded `{ raw_jwt, chatgpt_account_id, ... }` object.
     private static func chatgptAccountIdFromIdToken(tokens: [String: Any]) -> String? {
         if let dict = tokens["id_token"] as? [String: Any],
            let acc = dict["chatgpt_account_id"] as? String, !acc.isEmpty {
@@ -51,7 +52,6 @@ enum CodexCredentials {
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
         let payload = String(parts[1])
-        // JWT is base64url with no padding.
         var b64 = payload.replacingOccurrences(of: "-", with: "+")
                           .replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64.append("=") }
@@ -59,7 +59,6 @@ enum CodexCredentials {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        // Codex stores the account id under a namespaced claim.
         if let auth = obj["https://api.openai.com/auth"] as? [String: Any],
            let acc = auth["chatgpt_account_id"] as? String, !acc.isEmpty {
             return acc

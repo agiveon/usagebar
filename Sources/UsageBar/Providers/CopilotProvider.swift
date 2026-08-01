@@ -9,8 +9,9 @@ import Foundation
 // We parse generically: any category with a numeric quota becomes a
 // UsageWindow.  Unlimited categories are skipped.
 struct CopilotProvider: UsageProvider {
-    let id = "copilot"
-    let displayName = "GitHub Copilot"
+    let id: String
+    let displayName: String
+    let shortName: String
     let iconName = "chevron.left.forwardslash.chevron.right"
     let iconAsset: String? = "githubcopilot"
     let signInAction = SignInAction.openURL(
@@ -18,21 +19,61 @@ struct CopilotProvider: UsageProvider {
         hint: "Copilot sign-in lives in your editor's Copilot extension."
     )
 
+    /// Which apps.json entry this instance binds to.  Nil = "the first one
+    /// we find" (used when only a single account exists — preserves the
+    /// pre-multi-account id).
+    let appKey: String?
+
+    init() {
+        self.appKey = nil
+        self.id = "copilot"
+        self.displayName = "GitHub Copilot"
+        self.shortName = "Copilot"
+    }
+
+    /// One instance per additional apps.json entry.  `user` (GitHub
+    /// username) is used for the display label.
+    init(appKey: String, user: String?) {
+        self.appKey = appKey
+        let label = user ?? Self.shortenAppKey(appKey)
+        self.id = "copilot:\(label)"
+        self.displayName = "GitHub Copilot · \(label)"
+        self.shortName = label
+    }
+
+    private static func shortenAppKey(_ key: String) -> String {
+        // "github.com:Iv1.b507a08c87ecfe98" → "Iv1.b507a08c…"
+        let after = key.split(separator: ":").last.map(String.init) ?? key
+        return String(after.prefix(10)) + (after.count > 10 ? "…" : "")
+    }
+
+    /// Static discovery — called by the registry at build time.  Returns
+    /// one instance per Copilot account found on disk.  If nothing is
+    /// signed in, returns a single placeholder instance so the UI can
+    /// show the sign-in card.
+    static func discover() -> [CopilotProvider] {
+        let accounts = CopilotCredentials.discoverAccounts()
+        if accounts.count <= 1 {
+            return [CopilotProvider()]
+        }
+        return accounts.map { CopilotProvider(appKey: $0.appKey, user: $0.user) }
+    }
+
     private let usageURL = URL(string: "https://api.github.com/copilot_internal/user")!
     private let userAgent = "usagebar/0.1"
 
     func isAvailable() async -> Bool {
-        CopilotCredentials.loadToken() != nil
+        CopilotCredentials.loadAccount(appKey: appKey) != nil
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        guard let token = CopilotCredentials.loadToken() else {
+        guard let account = CopilotCredentials.loadAccount(appKey: appKey) else {
             throw ProviderError.tokenMissing
         }
 
         var req = URLRequest(url: usageURL, timeoutInterval: 12)
         req.httpMethod = "GET"
-        req.setValue("token \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("token \(account.token)", forHTTPHeaderField: "Authorization")
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 

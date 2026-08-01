@@ -10,24 +10,58 @@ import Foundation
 // surface entries that fit the usage-window shape, so newly-added windows show
 // up without a code change.
 struct ClaudeCodeProvider: UsageProvider {
-    let id = "claude-code"
-    let displayName = "Claude Code"
+    let id: String
+    let displayName: String
+    let shortName: String
     let iconName = "sparkles"
     let iconAsset: String? = "claude"
-    let signInAction = SignInAction.runCommand(
-        "claude",
-        hint: "Signs in to Claude Code via its own OAuth browser flow."
-    )
+    let signInAction: SignInAction
+
+    let configDir: String
+
+    /// Default install (`~/.claude`).  Kept as id `"claude-code"` so existing
+    /// prefs continue to bind to it.
+    init() {
+        self.configDir = ClaudeCredentials.defaultConfigDir
+        self.id = "claude-code"
+        self.displayName = "Claude Code"
+        self.shortName = "Claude"
+        self.signInAction = .runCommand(
+            "claude",
+            hint: "Signs in to Claude Code via its own OAuth browser flow."
+        )
+    }
+
+    /// Extra install using a specific `CLAUDE_CONFIG_DIR`.  `label` is the
+    /// user-supplied nickname ("Work", "Personal", …) — becomes the tab
+    /// label and disambiguates the id.
+    init(configDir: String, label: String) {
+        let expanded = (configDir as NSString).expandingTildeInPath
+        self.configDir = expanded
+        let slug = label.lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+        self.id = "claude-code:\(slug)"
+        self.displayName = "Claude Code · \(label)"
+        self.shortName = label
+        // Wrap the path in single quotes for the shell; escape any embedded
+        // single quotes by closing and reopening the quote.
+        let quotedDir = "'" + expanded.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+        self.signInAction = .runCommand(
+            "CLAUDE_CONFIG_DIR=\(quotedDir) claude",
+            hint: "Signs in to this Claude Code instance (\(configDir))."
+        )
+    }
 
     private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private let userAgent = "claude-code/2.1.204"
 
     func isAvailable() async -> Bool {
-        ClaudeCredentials.loadAccessToken() != nil
+        ClaudeCredentials.loadAccessToken(configDir: configDir) != nil
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        guard let token = ClaudeCredentials.loadAccessToken() else {
+        guard let token = ClaudeCredentials.loadAccessToken(configDir: configDir) else {
             throw ProviderError.tokenMissing
         }
 

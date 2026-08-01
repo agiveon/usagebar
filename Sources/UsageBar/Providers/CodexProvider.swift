@@ -15,24 +15,52 @@ import Foundation
 //     additional_rate_limits: [ { limit_name, rate_limit: {...} } ]  // optional
 //   }
 struct CodexProvider: UsageProvider {
-    let id = "codex"
-    let displayName = "ChatGPT · Codex"
+    let id: String
+    let displayName: String
+    let shortName: String
     let iconName = "terminal"
     let iconAsset: String? = "openai"
-    let signInAction = SignInAction.runCommand(
-        "codex login",
-        hint: "Signs in via your ChatGPT account (opens a browser)."
-    )
+    let signInAction: SignInAction
+
+    let configDir: String
+
+    /// Default install (`~/.codex` or `$CODEX_HOME`).
+    init() {
+        self.configDir = CodexCredentials.defaultConfigDir
+        self.id = "codex"
+        self.displayName = "ChatGPT · Codex"
+        self.shortName = "Codex"
+        self.signInAction = .runCommand(
+            "codex login",
+            hint: "Signs in via your ChatGPT account (opens a browser)."
+        )
+    }
+
+    init(configDir: String, label: String) {
+        let expanded = (configDir as NSString).expandingTildeInPath
+        self.configDir = expanded
+        let slug = label.lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+        self.id = "codex:\(slug)"
+        self.displayName = "ChatGPT · Codex · \(label)"
+        self.shortName = label
+        let quotedDir = "'" + expanded.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+        self.signInAction = .runCommand(
+            "CODEX_HOME=\(quotedDir) codex login",
+            hint: "Signs in to this Codex instance (\(configDir))."
+        )
+    }
 
     private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     private let userAgent = "codex-cli"
 
     func isAvailable() async -> Bool {
-        CodexCredentials.load() != nil
+        CodexCredentials.load(configDir: configDir) != nil
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        guard let creds = CodexCredentials.load() else {
+        guard let creds = CodexCredentials.load(configDir: configDir) else {
             throw ProviderError.tokenMissing
         }
 

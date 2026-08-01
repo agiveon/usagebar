@@ -13,41 +13,58 @@ struct PopoverView: View {
             }
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: 360)
     }
 }
 
-// MARK: - Main list
+// MARK: - Main list (tabs + selected provider content)
 
 private struct MainView: View {
     @EnvironmentObject var store: UsageStore
     let openSettings: () -> Void
 
+    /// Which provider tab is currently shown.  Nil = follow the menu-bar
+    /// active provider (default, and what we fall back to when the tab the
+    /// user was on gets disabled from Settings).
+    @State private var selectedTabID: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            Divider()
 
             let enabled = store.enabledProviders
             if enabled.isEmpty {
-                Text("No providers enabled. Open settings to turn one on.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Divider()
+                Text("No providers enabled. Open Settings to turn one on.")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(enabled, id: \.id) { provider in
-                    ProviderRow(provider: provider,
-                                status: store.statuses[provider.id],
-                                isActive: store.activeProviderID == provider.id,
-                                onSelect: { store.setActive(provider.id) })
-                    if provider.id != enabled.last?.id {
-                        Divider().opacity(0.4)
-                    }
+                Divider()
+                TabBar(enabled: enabled,
+                       selectedID: currentTab(enabled: enabled),
+                       onSelect: { selectedTabID = $0 })
+                Divider().opacity(0.4)
+                if let p = store.registry.provider(id: currentTab(enabled: enabled)) {
+                    ProviderContent(provider: p,
+                                    status: store.statuses[p.id],
+                                    isActive: store.activeProviderID == p.id)
                 }
             }
 
             Divider()
             footer
         }
+    }
+
+    private func currentTab(enabled: [UsageProvider]) -> String {
+        if let s = selectedTabID, enabled.contains(where: { $0.id == s }) {
+            return s
+        }
+        // Follow the menu-bar provider by default; if that's somehow disabled,
+        // any enabled one will do.
+        if enabled.contains(where: { $0.id == store.activeProviderID }) {
+            return store.activeProviderID
+        }
+        return enabled.first?.id ?? ""
     }
 
     private var header: some View {
@@ -84,27 +101,91 @@ private struct MainView: View {
     }
 }
 
-private struct ProviderRow: View {
+// MARK: - Tab bar
+
+private struct TabBar: View {
+    @EnvironmentObject var store: UsageStore
+    let enabled: [UsageProvider]
+    let selectedID: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(enabled, id: \.id) { p in
+                TabButton(
+                    provider: p,
+                    isSelected: selectedID == p.id,
+                    isMenuBar: store.activeProviderID == p.id,
+                    status: store.statuses[p.id],
+                    onTap: { onSelect(p.id) }
+                )
+            }
+        }
+    }
+}
+
+private struct TabButton: View {
+    let provider: UsageProvider
+    let isSelected: Bool
+    let isMenuBar: Bool
+    let status: ProviderStatus?
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 3) {
+                ProviderIcon(provider: provider, color: tabColor, size: 18)
+                Text(provider.shortName)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                // Small dot marks the provider currently in the menu bar.
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 3, height: 3)
+                    .opacity(isMenuBar ? 1 : 0)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.gray.opacity(0.18) : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(provider.displayName + (isMenuBar ? " · in menu bar" : ""))
+    }
+
+    private var tabColor: Color {
+        if case .some(.available(let snap)) = status, !snap.isStale {
+            return Thresholds.color(for: snap.worstPercent)
+        }
+        return .secondary
+    }
+}
+
+// MARK: - Selected tab's content
+
+private struct ProviderContent: View {
     @EnvironmentObject var store: UsageStore
     let provider: UsageProvider
     let status: ProviderStatus?
     let isActive: Bool
-    let onSelect: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                ProviderIcon(provider: provider, color: dotColor, size: 16)
+            HStack(spacing: 6) {
                 Text(provider.displayName)
-                    .font(.system(.body).weight(isActive ? .semibold : .regular))
+                    .font(.system(.body).weight(.semibold))
                 if isActive {
                     Text("· in menu bar")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if !isActive {
-                    Button("Show in menu bar", action: onSelect)
+                if !isActive, case .some(.available) = status {
+                    Button("Show in menu bar") { store.setActive(provider.id) }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
@@ -112,17 +193,23 @@ private struct ProviderRow: View {
 
             switch status {
             case .some(.available(let snap)):
-                ForEach(snap.windows) { w in
-                    WindowBar(window: w,
-                              isMenuBarMetric: isActive
-                                && store.menuBarWindowID == w.id)
+                if snap.windows.isEmpty {
+                    Text("no active windows")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ForEach(snap.windows) { w in
+                        WindowBar(window: w,
+                                  isMenuBarMetric: isActive
+                                    && store.menuBarWindowID == w.id)
+                    }
                 }
                 if snap.isStale {
                     Text("stale data")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
+
             case .some(.notAvailable(let reason)):
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(reason).font(.caption).foregroundStyle(.secondary)
                     Text(provider.signInAction.hint)
                         .font(.caption2).foregroundStyle(.secondary)
@@ -132,23 +219,21 @@ private struct ProviderRow: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
+
             case .some(.error(let msg)):
                 Text(msg).font(.caption).foregroundStyle(.red)
+
             case .none:
                 Text("loading…").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
-
-    private var dotColor: Color {
-        if case .some(.available(let snap)) = status, !snap.isStale {
-            return Thresholds.color(for: snap.worstPercent)
-        }
-        return .secondary
-    }
 }
 
-// Renders a provider's bundled brand SVG (tinted), falling back to its SF Symbol.
+// MARK: - Shared little views
+
+/// Brand SVG (or SF Symbol fallback), tinted.  Used by both tab buttons
+/// and the provider content header.
 private struct ProviderIcon: View {
     let provider: UsageProvider
     let color: Color
@@ -213,60 +298,57 @@ private struct SettingsView: View {
     let dismiss: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "chevron.left")
-                    Text("Back")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    Text("Settings").font(.headline)
                 }
-                .buttonStyle(.borderless)
-                Spacer()
-                Text("Settings").font(.headline)
-            }
 
-            Divider()
+                Divider()
 
-            // Providers -------------------------------------------------
-            Text("Providers")
-                .font(.subheadline).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(store.registry.providers, id: \.id) { p in
-                    Toggle(p.displayName, isOn: store.enabledBinding(p.id))
-                        .toggleStyle(.checkbox)
+                // Providers, grouped by kind -----------------------------
+                Text("Providers").font(.subheadline).foregroundStyle(.secondary)
+                ProvidersSection()
+
+                Divider()
+
+                // Menu bar display --------------------------------------
+                Text("Menu bar display")
+                    .font(.subheadline).foregroundStyle(.secondary)
+
+                Picker("Provider", selection: providerBinding) {
+                    ForEach(store.enabledProviders, id: \.id) { p in
+                        Text(p.displayName).tag(p.id)
+                    }
                 }
-            }
 
-            Divider()
-
-            // Menu bar display -----------------------------------------
-            Text("Menu bar display")
-                .font(.subheadline).foregroundStyle(.secondary)
-
-            Picker("Provider", selection: providerBinding) {
-                ForEach(store.enabledProviders, id: \.id) { p in
-                    Text(p.displayName).tag(p.id)
+                Picker("Metric", selection: $store.menuBarWindowID) {
+                    Text("Worst window").tag(MenuBarWorstMetric)
+                    ForEach(store.activeProviderWindows) { w in
+                        Text(w.label).tag(w.id)
+                    }
                 }
+                .disabled(store.activeProviderWindows.isEmpty)
+
+                Toggle("Show percentage next to icon", isOn: $store.showPercentLabel)
+
+                Divider()
+
+                // Refresh -----------------------------------------------
+                Text("Refresh interval: \(Int(store.refreshInterval))s")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Slider(value: $store.refreshInterval, in: 30...300, step: 15)
             }
-
-            Picker("Metric", selection: $store.menuBarWindowID) {
-                Text("Worst window").tag(MenuBarWorstMetric)
-                ForEach(store.activeProviderWindows) { w in
-                    Text(w.label).tag(w.id)
-                }
-            }
-            .disabled(store.activeProviderWindows.isEmpty)
-
-            Toggle("Show percentage next to icon", isOn: $store.showPercentLabel)
-
-            Divider()
-
-            // Refresh --------------------------------------------------
-            Text("Refresh interval: \(Int(store.refreshInterval))s")
-                .font(.subheadline).foregroundStyle(.secondary)
-            Slider(value: $store.refreshInterval, in: 30...300, step: 15)
         }
+        .frame(maxHeight: 520)
     }
 
     private var providerBinding: Binding<String> {
@@ -274,5 +356,80 @@ private struct SettingsView: View {
             get: { store.activeProviderID },
             set: { store.setActive($0) }
         )
+    }
+}
+
+// MARK: - Providers section (grouped by kind + add/remove for Claude/Codex)
+
+private struct ProvidersSection: View {
+    @EnvironmentObject var store: UsageStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            KindGroup(kind: .claude,
+                      title: "Claude Code",
+                      providers: instances(prefix: "claude-code"))
+            KindGroup(kind: .codex,
+                      title: "ChatGPT · Codex",
+                      providers: instances(prefix: "codex"))
+            KindGroup(kind: nil,
+                      title: "Cursor",
+                      providers: instances(prefix: "cursor"))
+            KindGroup(kind: nil,
+                      title: "GitHub Copilot",
+                      providers: instances(prefix: "copilot"))
+        }
+    }
+
+    private func instances(prefix: String) -> [UsageProvider] {
+        store.registry.providers.filter {
+            $0.id == prefix || $0.id.hasPrefix("\(prefix):")
+        }
+    }
+}
+
+/// One provider kind and its detected instances.  Instances come from disk —
+/// there's no "Add" flow in the app.  For services that support isolated
+/// installs (Claude, Codex) we show a tiny hint on how to add another one.
+private struct KindGroup: View {
+    @EnvironmentObject var store: UsageStore
+    let kind: ProviderRegistry.Kind?    // .claude / .codex show the hint
+    let title: String
+    let providers: [UsageProvider]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption).foregroundStyle(.secondary)
+
+            if providers.isEmpty {
+                Text("(no accounts detected)")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(providers, id: \.id) { p in
+                    Toggle(p.displayName, isOn: store.enabledBinding(p.id))
+                        .toggleStyle(.checkbox)
+                }
+            }
+
+            if let addHint {
+                Text(addHint)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private var addHint: String? {
+        switch kind {
+        case .claude:
+            return "Second account? Run  CLAUDE_CONFIG_DIR=~/.claude-work claude  in Terminal, sign in, then hit refresh."
+        case .codex:
+            return "Second account? Run  CODEX_HOME=~/.codex-work codex login  in Terminal, sign in, then hit refresh."
+        case .none:
+            return nil
+        }
     }
 }

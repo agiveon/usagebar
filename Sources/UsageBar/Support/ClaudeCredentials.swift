@@ -1,18 +1,22 @@
 import Foundation
 
-// Load Claude Code's OAuth access token.
+// Load Claude Code's OAuth access token for a specific config dir.
 //
-// Claude Code on macOS stores its credentials in the login Keychain under the
-// generic-password service `Claude Code-credentials` (a JSON blob).  Some
-// installs (e.g. --dangerously-skip-permissions setups, CI images, and users
-// who opted out of Keychain storage) also keep a copy at
-// ~/.claude/.credentials.json.  We try Keychain first, then the file — the
-// token is used once per poll and never cached.
+// Claude Code's config lives at $CLAUDE_CONFIG_DIR (default: ~/.claude).
+// The default install typically stores the token in the login Keychain
+// under service `Claude Code-credentials`; some installs (and every
+// isolated CLAUDE_CONFIG_DIR install) keep a copy in
+//   <configDir>/.credentials.json
+// We try the file first (works for any config dir), then fall back to
+// Keychain only for the default `~/.claude` install.  The token is used
+// once per poll and never cached.
 enum ClaudeCredentials {
 
-    static func loadAccessToken() -> String? {
-        if let t = fromKeychain() { return t }
-        if let t = fromCredentialsFile() { return t }
+    static let defaultConfigDir = ("~/.claude" as NSString).expandingTildeInPath
+
+    static func loadAccessToken(configDir: String = defaultConfigDir) -> String? {
+        if let t = fromCredentialsFile(configDir: configDir) { return t }
+        if configDir == defaultConfigDir, let t = fromKeychain() { return t }
         return nil
     }
 
@@ -22,16 +26,15 @@ enum ClaudeCredentials {
     }
 
     private static func decodeEnvelope(_ data: Data) -> String? {
-        let decoder = JSONDecoder()
-        if let env = try? decoder.decode(Envelope.self, from: data),
+        if let env = try? JSONDecoder().decode(Envelope.self, from: data),
            let t = env.claudeAiOauth?.accessToken, !t.isEmpty {
             return t
         }
         return nil
     }
 
-    private static func fromCredentialsFile() -> String? {
-        let path = ("~/.claude/.credentials.json" as NSString).expandingTildeInPath
+    private static func fromCredentialsFile(configDir: String) -> String? {
+        let path = "\(configDir)/.credentials.json"
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return nil
         }
@@ -39,9 +42,8 @@ enum ClaudeCredentials {
     }
 
     // Shells out to `security` — first hit prompts the user to grant access to
-    // that specific keychain item, then it's silent.  Avoids linking against
-    // Security.framework directly.  Hard-timed at 5s so a stuck dialog can't
-    // freeze the poll loop.
+    // that specific keychain item, then it's silent.  Hard-timed at 5s so a
+    // stuck dialog can't freeze the poll loop.
     private static func fromKeychain() -> String? {
         guard let raw = ShellRunner.run(
             "/usr/bin/security",

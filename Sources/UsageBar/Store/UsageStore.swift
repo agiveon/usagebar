@@ -26,20 +26,60 @@ final class UsageStore: ObservableObject {
 
     private var timerTask: Task<Void, Never>?
     private var consecutiveFailures: [String: Int] = [:]
+    private var registryCancellable: AnyCancellable?
 
     init(registry: ProviderRegistry) {
         self.registry = registry
-        // Seed every enabled provider with a placeholder so no row sits at
-        // "loading…" forever if its first poll is slow or hangs.
+        seedPlaceholders()
+        ensureActiveIsValid()
+
+        // Re-sync statuses whenever the registry rebuilds (user added or
+        // removed an extra account).  We seed placeholders for newcomers,
+        // drop stale entries, and kick a refresh for any newcomer that's
+        // enabled.
+        registryCancellable = registry.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.reconcileWithRegistry()
+                }
+            }
+
+        startPolling()
+        Task { await refreshNow() }
+    }
+
+    private func seedPlaceholders() {
         for p in registry.providers where !isDisabled(p.id) {
-            statuses[p.id] = .notAvailable("checking…")
+            if statuses[p.id] == nil {
+                statuses[p.id] = .notAvailable("checking…")
+            }
         }
+    }
+
+    private func ensureActiveIsValid() {
         if storedActiveID.isEmpty || registry.provider(id: storedActiveID) == nil,
            let first = enabledProviders.first {
             storedActiveID = first.id
+            menuBarWindowID = MenuBarWorstMetric
         }
-        startPolling()
-        Task { await refreshNow() }
+    }
+
+    private func reconcileWithRegistry() {
+        let liveIDs = Set(registry.providers.map(\.id))
+        // Drop statuses / failure counts for instances that no longer exist.
+        for id in Array(statuses.keys) where !liveIDs.contains(id) {
+            statuses.removeValue(forKey: id)
+            consecutiveFailures.removeValue(forKey: id)
+        }
+        // Placeholder + immediate refresh for anything new & enabled.
+        let newIDs = liveIDs.subtracting(statuses.keys)
+        for id in newIDs where !isDisabled(id) {
+            statuses[id] = .notAvailable("checking…")
+            Task { await refreshOne(providerID: id) }
+        }
+        ensureActiveIsValid()
+        objectWillChange.send()
     }
 
     // MARK: - Active provider (drives the menu-bar glyph)
@@ -116,10 +156,25 @@ final class UsageStore: ObservableObject {
     func signIn(providerID: String) {
         guard let p = registry.provider(id: providerID) else { return }
         SignInLauncher.perform(p.signInAction)
-        // Retry shortly — user usually completes sign-in within a few seconds.
-        Task {
-            try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+        // OAuth in the browser typically takes 15–30 s.  Poll every 3 s for
+        // up to 90 s so the tab flips to live data seconds after the user
+        // finishes signing in, not on the next 60 s poll tick.
+        Task { await pollUntilAvailable(providerID: providerID) }
+    }
+
+    /// Trigger a manual disk rescan (used after a user does
+    /// `CLAUDE_CONFIG_DIR=~/.claude-work claude` in their own Terminal —
+    /// they can hit the popover's refresh button and we'll pick it up).
+    func rescanDisk() {
+        registry.rebuild()
+    }
+
+    private func pollUntilAvailable(providerID: String, maxSeconds: Int = 90) async {
+        let start = Date()
+        while Date().timeIntervalSince(start) < TimeInterval(maxSeconds) {
+            try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
             await refreshOne(providerID: providerID)
+            if case .some(.available) = statuses[providerID] { return }
         }
     }
 
@@ -137,6 +192,10 @@ final class UsageStore: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
+
+        // A manual refresh doubles as a rescan — cheap, and it lets the
+        // user pick up a freshly-signed-in ~/.claude-work without quitting.
+        registry.rebuild()
 
         await withTaskGroup(of: (String, ProviderStatus).self) { group in
             for provider in enabledProviders {
@@ -192,11 +251,14 @@ final class UsageStore: ObservableObject {
     }
 
     nonisolated private static func notAvailableHint(for provider: UsageProvider) -> String {
-        switch provider.id {
-        case "claude-code": return "not signed in to Claude Code"
-        case "codex":       return "not signed in to Codex"
+        // Match on the id prefix so extra instances (e.g. "claude-code:work")
+        // get the same base hint as their default counterpart.
+        let base = provider.id.split(separator: ":").first.map(String.init) ?? provider.id
+        switch base {
+        case "claude-code": return "not signed in to \(provider.displayName)"
+        case "codex":       return "not signed in to \(provider.displayName)"
         case "cursor":      return "not signed in to Cursor (or Cursor.app not installed)"
-        case "copilot":     return "no GitHub Copilot token found"
+        case "copilot":     return "no GitHub Copilot token found for \(provider.displayName)"
         default:            return "not available"
         }
     }
