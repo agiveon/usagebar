@@ -29,17 +29,30 @@ final class ProviderRegistry: ObservableObject {
         rebuild()
     }
 
-    /// Rescan disk and rebuild the provider list.  Cheap.
+    /// Rescan disk + Keychain and rebuild the provider list.  Cheap.
     func rebuild() {
         var list: [UsageProvider] = []
 
-        // Claude — default install, then anything under ~/.claude-*
-        list.append(ClaudeCodeProvider())
-        for extra in Self.discoverClaudeExtras() {
-            list.append(ClaudeCodeProvider(configDir: extra.path, label: extra.label))
+        // Claude — one instance per `Claude Code-credentials*` Keychain
+        // item.  The un-suffixed item is the default; every suffixed one
+        // is an additional account (created by a `claude auth login`
+        // under a different CLAUDE_CONFIG_DIR).
+        let services = ClaudeCredentials.discoverKeychainServices()
+        let hasDefault = services.contains("Claude Code-credentials")
+        if hasDefault {
+            list.append(ClaudeCodeProvider())
+        }
+        for service in services where service != "Claude Code-credentials" {
+            let suffix = String(service.dropFirst("Claude Code-credentials-".count))
+            list.append(ClaudeCodeProvider(keychainService: service, suffix: suffix))
+        }
+        // Fall back to the default even if no Keychain item exists — the
+        // popover shows the sign-in card in that case.
+        if !hasDefault && list.first(where: { $0.id == "claude-code" }) == nil {
+            list.append(ClaudeCodeProvider())
         }
 
-        // Codex — same pattern with ~/.codex-*
+        // Codex — still one default install; ~/.codex-* extras via disk scan.
         list.append(CodexProvider())
         for extra in Self.discoverCodexExtras() {
             list.append(CodexProvider(configDir: extra.path, label: extra.label))
@@ -64,15 +77,6 @@ final class ProviderRegistry: ObservableObject {
     private struct ExtraInstance {
         let label: String
         let path: String
-    }
-
-    /// Find ~/.claude-* dirs that have valid credentials on disk.
-    /// A dir is considered "valid" if either the `.credentials.json` file
-    /// exists inside it and parses into a non-empty access token.
-    private static func discoverClaudeExtras() -> [ExtraInstance] {
-        discoverExtras(prefix: ".claude-") { path in
-            ClaudeCredentials.loadAccessToken(configDir: path) != nil
-        }
     }
 
     /// Find ~/.codex-* dirs that have valid credentials on disk.

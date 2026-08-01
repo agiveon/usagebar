@@ -32,6 +32,25 @@ private struct MainView: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
+            if store.isAddClaudeInProgress {
+                Button {
+                    store.focusPendingSignIn()
+                } label: {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Claude sign-in in progress — click to reopen the window")
+                            .font(.caption)
+                        Spacer()
+                        Image(systemName: "arrow.up.forward.app")
+                            .font(.caption)
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.accentColor.opacity(0.15)))
+                }
+                .buttonStyle(.plain)
+            }
+
             let enabled = store.enabledProviders
             if enabled.isEmpty {
                 Divider()
@@ -131,15 +150,17 @@ private struct TabButton: View {
     let status: ProviderStatus?
     let onTap: () -> Void
 
+    @EnvironmentObject var store: UsageStore
+
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 3) {
                 ProviderIcon(provider: provider, color: tabColor, size: 18)
-                Text(provider.shortName)
+                Text(store.effectiveShortName(for: provider))
                     .font(.caption2)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                     .foregroundStyle(isSelected ? .primary : .secondary)
-                // Small dot marks the provider currently in the menu bar.
                 Circle()
                     .fill(Color.secondary)
                     .frame(width: 3, height: 3)
@@ -155,7 +176,8 @@ private struct TabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(provider.displayName + (isMenuBar ? " · in menu bar" : ""))
+        .help(store.effectiveDisplayName(for: provider)
+              + (isMenuBar ? " · in menu bar" : ""))
     }
 
     private var tabColor: Color {
@@ -176,18 +198,31 @@ private struct ProviderContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(provider.displayName)
-                    .font(.system(.body).weight(.semibold))
-                if isActive {
-                    Text("· in menu bar")
-                        .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(store.effectiveDisplayName(for: provider))
+                        .font(.system(.body).weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if isActive {
+                        Text("· in menu bar")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if !isActive, case .some(.available) = status {
+                        Button("Show in menu bar") { store.setActive(provider.id) }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
                 }
-                Spacer()
-                if !isActive, case .some(.available) = status {
-                    Button("Show in menu bar") { store.setActive(provider.id) }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
+                // If the user gave this account a nickname, show the real
+                // email as a subtitle so they know what's underneath.
+                if store.customLabel(for: provider.id) != nil,
+                   let email = store.accountLabel(for: provider.id) {
+                    Text(email)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
 
@@ -326,7 +361,7 @@ private struct SettingsView: View {
 
                 Picker("Provider", selection: providerBinding) {
                     ForEach(store.enabledProviders, id: \.id) { p in
-                        Text(p.displayName).tag(p.id)
+                        Text(store.effectiveDisplayName(for: p)).tag(p.id)
                     }
                 }
 
@@ -388,6 +423,104 @@ private struct ProvidersSection: View {
     }
 }
 
+/// Settings row for a single account: enable toggle, account email
+/// subtitle, and an editable nickname field.  The nickname takes priority
+/// over the email in the tab bar / row header.
+private struct AccountRow: View {
+    @EnvironmentObject var store: UsageStore
+    let provider: UsageProvider
+
+    @State private var confirmingDelete = false
+
+    private var isDuplicate: Bool { store.duplicateProviderIDs.contains(provider.id) }
+    private var isClaude: Bool { provider is ClaudeCodeProvider }
+    private var isDefaultClaude: Bool {
+        (provider as? ClaudeCodeProvider)?.keychainService == "Claude Code-credentials"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Toggle(store.effectiveDisplayName(for: provider),
+                       isOn: store.enabledBinding(provider.id))
+                    .toggleStyle(.checkbox)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isDuplicate {
+                    Text("duplicate")
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.25))
+                        .foregroundStyle(.orange)
+                        .cornerRadius(4)
+                }
+                Spacer()
+                if isClaude {
+                    Button {
+                        confirmingDelete = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isDefaultClaude
+                          ? "Delete this account (signs you out of Claude Code!)"
+                          : "Delete this account's Keychain entry")
+                    .confirmationDialog(
+                        deleteDialogTitle,
+                        isPresented: $confirmingDelete
+                    ) {
+                        Button("Delete", role: .destructive) {
+                            store.deleteClaudeAccount(providerID: provider.id)
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(deleteDialogMessage)
+                    }
+                }
+            }
+            if let email = store.accountLabel(for: provider.id),
+               store.customLabel(for: provider.id) != nil {
+                Text(email)
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+            }
+            HStack(spacing: 6) {
+                Text("Nickname")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(width: 62, alignment: .leading)
+                TextField(nicknamePlaceholder,
+                          text: store.customLabelBinding(for: provider.id))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+            }
+            .padding(.leading, 20)
+        }
+        .padding(.vertical, 2)
+        .opacity(isDuplicate ? 0.6 : 1.0)
+    }
+
+    private var nicknamePlaceholder: String {
+        if let email = store.accountLabel(for: provider.id) {
+            return email
+        }
+        return "e.g. Work"
+    }
+
+    private var deleteDialogTitle: String {
+        isDefaultClaude
+            ? "Sign out of Claude Code?"
+            : "Delete this Claude Code account?"
+    }
+
+    private var deleteDialogMessage: String {
+        if isDefaultClaude {
+            return "Removes the Keychain entry for your primary Claude Code install. Claude Code will be signed out in every editor and terminal that uses this Mac — you'll have to run `claude` and sign in again next time you want to use it."
+        }
+        return "Removes the Keychain entry. This won't sign you out of Claude Code in any editor you're actively using it in — you can sign back in from the CLI any time."
+    }
+}
+
 /// One provider kind and its detected instances.  Instances come from disk —
 /// there's no "Add" flow in the app.  For services that support isolated
 /// installs (Claude, Codex) we show a tiny hint on how to add another one.
@@ -407,29 +540,29 @@ private struct KindGroup: View {
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(providers, id: \.id) { p in
-                    Toggle(p.displayName, isOn: store.enabledBinding(p.id))
-                        .toggleStyle(.checkbox)
+                    AccountRow(provider: p)
                 }
             }
 
-            if let addHint {
-                Text(addHint)
+            if kind == .claude {
+                Button {
+                    store.beginAddClaudeAccount()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                        Text("Add another Claude Code account")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Opens a sign-in window inside UsageBar. No Terminal.")
+            } else if kind == .codex {
+                Text("Second Codex account? Run  CODEX_HOME=~/.codex-work codex login  in Terminal, then hit refresh.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .padding(.top, 2)
             }
-        }
-    }
-
-    private var addHint: String? {
-        switch kind {
-        case .claude:
-            return "Second account? Run  CLAUDE_CONFIG_DIR=~/.claude-work claude  in Terminal, sign in, then hit refresh."
-        case .codex:
-            return "Second account? Run  CODEX_HOME=~/.codex-work codex login  in Terminal, sign in, then hit refresh."
-        case .none:
-            return nil
         }
     }
 }

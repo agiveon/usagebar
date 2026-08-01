@@ -1,24 +1,65 @@
 import Foundation
+import Security
 
-// Load Claude Code's OAuth access token for a specific config dir.
+// Where Claude Code actually keeps its OAuth tokens on macOS:
 //
-// Claude Code's config lives at $CLAUDE_CONFIG_DIR (default: ~/.claude).
-// The default install typically stores the token in the login Keychain
-// under service `Claude Code-credentials`; some installs (and every
-// isolated CLAUDE_CONFIG_DIR install) keep a copy in
-//   <configDir>/.credentials.json
-// We try the file first (works for any config dir), then fall back to
-// Keychain only for the default `~/.claude` install.  The token is used
-// once per poll and never cached.
+//   `Claude Code-credentials`               ← the default install
+//   `Claude Code-credentials-<8-hex-suffix>` ← every extra install with
+//                                              its own CLAUDE_CONFIG_DIR
+//
+// The suffix is a hash Claude Code derives from the config dir path.  We
+// don't need to reproduce it — we just enumerate every generic-password
+// item whose service starts with "Claude Code-credentials" and treat each
+// as its own account.  This lets us support N accounts without knowing
+// anything about paths or hashes.
+//
+// A few installs (CI images, --dangerously-skip setups) put the token in
+// `<configDir>/.credentials.json` instead — we still read that as a
+// fallback for a specific service if Keychain returns nothing.
 enum ClaudeCredentials {
 
-    static let defaultConfigDir = ("~/.claude" as NSString).expandingTildeInPath
+    /// Every `Claude Code-credentials*` Keychain service on this Mac.
+    /// Attribute-only lookup — doesn't trigger a Keychain access prompt.
+    static func discoverKeychainServices() -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String:            kSecClassGenericPassword,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String:       kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let items = result as? [[String: Any]] else { return [] }
 
-    static func loadAccessToken(configDir: String = defaultConfigDir) -> String? {
-        if let t = fromCredentialsFile(configDir: configDir) { return t }
-        if configDir == defaultConfigDir, let t = fromKeychain() { return t }
+        var services: [String] = []
+        for item in items {
+            guard let svc = item[kSecAttrService as String] as? String else { continue }
+            if svc == "Claude Code-credentials"
+                || svc.hasPrefix("Claude Code-credentials-") {
+                services.append(svc)
+            }
+        }
+        // Default first; then remaining sorted so ordering is stable
+        // across scans and matches whatever hash algorithm Claude uses.
+        return services.sorted { a, b in
+            if a == "Claude Code-credentials" { return true }
+            if b == "Claude Code-credentials" { return false }
+            return a < b
+        }
+    }
+
+    /// Read the access token from a specific Keychain service.  Falls back
+    /// to `<configDir>/.credentials.json` if provided and Keychain is empty.
+    static func loadAccessToken(keychainService: String,
+                                fallbackConfigDir: String? = nil) -> String? {
+        if let t = fromKeychain(service: keychainService) { return t }
+        if let dir = fallbackConfigDir, let t = fromCredentialsFile(configDir: dir) {
+            return t
+        }
         return nil
     }
+
+    // MARK: - Sources
 
     private struct Envelope: Decodable {
         struct OAuth: Decodable { let accessToken: String? }
@@ -41,16 +82,25 @@ enum ClaudeCredentials {
         return decodeEnvelope(data)
     }
 
-    // Shells out to `security` — first hit prompts the user to grant access to
-    // that specific keychain item, then it's silent.  Hard-timed at 5s so a
-    // stuck dialog can't freeze the poll loop.
-    private static func fromKeychain() -> String? {
+    private static func fromKeychain(service: String) -> String? {
         guard let raw = ShellRunner.run(
             "/usr/bin/security",
-            args: ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            args: ["find-generic-password", "-s", service, "-w"],
             timeout: 5.0
         ) else { return nil }
         guard let jsonData = raw.data(using: .utf8) else { return nil }
         return decodeEnvelope(jsonData)
+    }
+
+    /// Permanently delete a `Claude Code-credentials*` Keychain item.  Used
+    /// by the Settings "Delete" button to clean up orphans from failed
+    /// prior sign-in attempts.
+    static func deleteKeychainItem(service: String) -> Bool {
+        let ok = ShellRunner.run(
+            "/usr/bin/security",
+            args: ["delete-generic-password", "-s", service],
+            timeout: 5.0
+        )
+        return ok != nil
     }
 }

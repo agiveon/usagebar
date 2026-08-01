@@ -23,6 +23,8 @@ final class UsageStore: ObservableObject {
     @AppStorage("disabledProviderIDs") private var disabledIDsRaw: String = ""
     @AppStorage("refreshIntervalSeconds") var refreshInterval: Double = 60
     @AppStorage("showPercentLabel") var showPercentLabel: Bool = true
+    /// User-chosen nicknames per provider id, JSON-encoded.
+    @AppStorage("customLabels") private var customLabelsRaw: String = "{}"
 
     private var timerTask: Task<Void, Never>?
     private var consecutiveFailures: [String: Int] = [:]
@@ -103,7 +105,8 @@ final class UsageStore: ObservableObject {
     func isEnabled(_ id: String)  -> Bool { !isDisabled(id) }
 
     var enabledProviders: [UsageProvider] {
-        registry.providers.filter { !isDisabled($0.id) }
+        let dups = duplicateProviderIDs
+        return registry.providers.filter { !isDisabled($0.id) && !dups.contains($0.id) }
     }
 
     func setEnabled(_ id: String, _ enabled: Bool) {
@@ -136,6 +139,81 @@ final class UsageStore: ObservableObject {
                 set: { self.setEnabled(id, $0) })
     }
 
+    // MARK: - Custom labels / display names
+
+    private var customLabels: [String: String] {
+        guard let data = customLabelsRaw.data(using: .utf8),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    func customLabel(for providerID: String) -> String? {
+        let raw = customLabels[providerID]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (raw?.isEmpty == false) ? raw : nil
+    }
+
+    func setCustomLabel(_ label: String, for providerID: String) {
+        var dict = customLabels
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            dict.removeValue(forKey: providerID)
+        } else {
+            dict[providerID] = trimmed
+        }
+        if let data = try? JSONEncoder().encode(dict),
+           let str  = String(data: data, encoding: .utf8) {
+            customLabelsRaw = str
+            objectWillChange.send()
+        }
+    }
+
+    func customLabelBinding(for providerID: String) -> Binding<String> {
+        Binding(get: { self.customLabel(for: providerID) ?? "" },
+                set: { self.setCustomLabel($0, for: providerID) })
+    }
+
+    /// The email / display name the provider reported for this account, if
+    /// we've successfully polled it.
+    func accountLabel(for providerID: String) -> String? {
+        guard case .some(.available(let snap)) = statuses[providerID] else { return nil }
+        return snap.accountLabel
+    }
+
+    /// Full row/tab header: "Claude Code · Work" or "Claude Code · amir@…".
+    func effectiveDisplayName(for provider: UsageProvider) -> String {
+        let baseTitle = baseKindTitle(for: provider)
+        if let custom = customLabel(for: provider.id) {
+            return "\(baseTitle) · \(custom)"
+        }
+        if let email = accountLabel(for: provider.id), !email.isEmpty {
+            return "\(baseTitle) · \(email)"
+        }
+        return provider.displayName
+    }
+
+    /// Compact label for tab bar (keeps tabs skinny).
+    func effectiveShortName(for provider: UsageProvider) -> String {
+        if let custom = customLabel(for: provider.id) { return custom }
+        if let email = accountLabel(for: provider.id) {
+            // Local part before @ — usually the friendliest 1-word label.
+            if let at = email.firstIndex(of: "@") { return String(email[..<at]) }
+            return email
+        }
+        return provider.shortName
+    }
+
+    /// The kind-only title without any account/instance suffix — e.g.
+    /// "Claude Code" (from "Claude Code · Account 2" or plain "Claude Code").
+    private func baseKindTitle(for provider: UsageProvider) -> String {
+        // If displayName has " · " in it, take the prefix — that's the
+        // clean per-kind title.  Otherwise use displayName as-is.
+        if let sep = provider.displayName.range(of: " · ") {
+            return String(provider.displayName[..<sep.lowerBound])
+        }
+        return provider.displayName
+    }
+
     // MARK: - Menu bar metric
 
     var menuBarPercent: Double? {
@@ -162,11 +240,79 @@ final class UsageStore: ObservableObject {
         Task { await pollUntilAvailable(providerID: providerID) }
     }
 
-    /// Trigger a manual disk rescan (used after a user does
-    /// `CLAUDE_CONFIG_DIR=~/.claude-work claude` in their own Terminal —
-    /// they can hit the popover's refresh button and we'll pick it up).
+    /// Trigger a manual disk rescan.
     func rescanDisk() {
         registry.rebuild()
+    }
+
+    /// Delete the Keychain item backing a Claude account.  The tab
+    /// disappears on the next registry rebuild.  Deleting the default
+    /// item signs the user out of Claude Code in every editor — the UI
+    /// confirmation dialog spells this out.
+    func deleteClaudeAccount(providerID: String) {
+        guard let p = registry.provider(id: providerID) as? ClaudeCodeProvider
+        else { return }
+        _ = ClaudeCredentials.deleteKeychainItem(service: p.keychainService)
+        statuses.removeValue(forKey: providerID)
+        registry.rebuild()
+    }
+
+    /// Providers whose account emails duplicate another provider's — used
+    /// by the UI to grey out or hide obvious duplicates.  Preference for
+    /// which to keep: the default `claude-code` beats any suffixed instance;
+    /// otherwise the alphabetically-first id wins so it's stable across runs.
+    var duplicateProviderIDs: Set<String> {
+        var seen: [String: String] = [:]     // email -> chosen provider id
+        var dups: Set<String> = []
+        // Prefer default first, then everything else sorted.
+        let ordered = registry.providers.sorted { a, b in
+            if a.id == "claude-code" { return true }
+            if b.id == "claude-code" { return false }
+            return a.id < b.id
+        }
+        for p in ordered {
+            guard let email = accountLabel(for: p.id), !email.isEmpty else { continue }
+            let key = "\(kindPrefix(p.id))|\(email)"
+            if let existing = seen[key] {
+                _ = existing
+                dups.insert(p.id)
+            } else {
+                seen[key] = p.id
+            }
+        }
+        return dups
+    }
+
+    private func kindPrefix(_ id: String) -> String {
+        id.split(separator: ":").first.map(String.init) ?? id
+    }
+
+    /// One-click, zero-Terminal add-a-Claude-account flow.  Opens a
+    /// floating window, runs `claude auth login` in the background, and
+    /// picks up the new install once creds land.
+    @Published private(set) var isAddClaudeInProgress = false
+    private var pendingSignInController: SignInWindowController?
+
+    func beginAddClaudeAccount() {
+        if let existing = pendingSignInController {
+            existing.bringToFront()
+            return
+        }
+        let controller = SignInWindowController { [weak self] in
+            self?.pendingSignInController = nil
+            self?.isAddClaudeInProgress = false
+            self?.rescanDisk()
+            Task { await self?.refreshNow() }
+        }
+        pendingSignInController = controller
+        isAddClaudeInProgress = true
+        controller.present()
+    }
+
+    /// Bring the in-progress sign-in window back to front if there is one.
+    /// Called from the popover so the user can never lose the window.
+    func focusPendingSignIn() {
+        pendingSignInController?.bringToFront()
     }
 
     private func pollUntilAvailable(providerID: String, maxSeconds: Int = 90) async {

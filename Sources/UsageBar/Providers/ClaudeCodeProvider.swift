@@ -17,12 +17,13 @@ struct ClaudeCodeProvider: UsageProvider {
     let iconAsset: String? = "claude"
     let signInAction: SignInAction
 
-    let configDir: String
+    /// Keychain service name this instance's token lives under.  Every
+    /// `Claude Code-credentials*` item = one account.
+    let keychainService: String
 
-    /// Default install (`~/.claude`).  Kept as id `"claude-code"` so existing
-    /// prefs continue to bind to it.
+    /// Default install (the un-suffixed Keychain item).
     init() {
-        self.configDir = ClaudeCredentials.defaultConfigDir
+        self.keychainService = "Claude Code-credentials"
         self.id = "claude-code"
         self.displayName = "Claude Code"
         self.shortName = "Claude"
@@ -32,40 +33,59 @@ struct ClaudeCodeProvider: UsageProvider {
         )
     }
 
-    /// Extra install using a specific `CLAUDE_CONFIG_DIR`.  `label` is the
-    /// user-supplied nickname ("Work", "Personal", …) — becomes the tab
-    /// label and disambiguates the id.
-    init(configDir: String, label: String) {
-        let expanded = (configDir as NSString).expandingTildeInPath
-        self.configDir = expanded
-        let slug = label.lowercased()
-            .replacingOccurrences(of: " ", with: "_")
-            .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
-        self.id = "claude-code:\(slug)"
-        self.displayName = "Claude Code · \(label)"
-        self.shortName = label
-        // Wrap the path in single quotes for the shell; escape any embedded
-        // single quotes by closing and reopening the quote.
-        let quotedDir = "'" + expanded.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
+    /// Extra account discovered from a `Claude Code-credentials-<suffix>`
+    /// Keychain item.  Suffix disambiguates the id; the display starts as
+    /// "Claude Code · <suffix>" and gets nicer once we fetch the email.
+    init(keychainService: String, suffix: String) {
+        self.keychainService = keychainService
+        self.id = "claude-code:\(suffix)"
+        self.displayName = "Claude Code · \(suffix)"
+        self.shortName = suffix
         self.signInAction = .runCommand(
-            "CLAUDE_CONFIG_DIR=\(quotedDir) claude",
-            hint: "Signs in to this Claude Code instance (\(configDir))."
+            "claude",
+            hint: "Sign in with your other account from the Claude Code CLI."
         )
     }
 
-    private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private let userAgent = "claude-code/2.1.204"
+    private let usageURL   = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    private let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
+    private let userAgent  = "claude-code/2.1.204"
 
     func isAvailable() async -> Bool {
-        ClaudeCredentials.loadAccessToken(configDir: configDir) != nil
+        ClaudeCredentials.loadAccessToken(keychainService: keychainService) != nil
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        guard let token = ClaudeCredentials.loadAccessToken(configDir: configDir) else {
+        guard let token = ClaudeCredentials.loadAccessToken(keychainService: keychainService) else {
             throw ProviderError.tokenMissing
         }
 
-        var req = URLRequest(url: usageURL, timeoutInterval: 12)
+        // Kick both requests in parallel — profile is cheap, and we want the
+        // account email to land in the same snapshot as the usage numbers.
+        async let usageData = self.getJSON(url: usageURL, token: token)
+        async let profileData = try? self.getJSON(url: profileURL, token: token)
+
+        let usage = try await usageData
+        let windows = try ClaudeUsageParser.parseWindows(data: usage)
+
+        var email: String?
+        if let data = await profileData,
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let account = obj["account"] as? [String: Any] {
+            email = (account["email"] as? String)
+                ?? (account["display_name"] as? String)
+                ?? (account["full_name"] as? String)
+        }
+
+        return UsageSnapshot(provider: id,
+                             windows: windows,
+                             fetchedAt: Date(),
+                             isStale: false,
+                             accountLabel: email)
+    }
+
+    private func getJSON(url: URL, token: String) async throws -> Data {
+        var req = URLRequest(url: url, timeoutInterval: 12)
         req.httpMethod = "GET"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -77,17 +97,11 @@ struct ClaudeCodeProvider: UsageProvider {
             throw ProviderError.badResponse("no HTTP response")
         }
         switch http.statusCode {
-        case 200...299: break
+        case 200...299: return data
         case 401: throw ProviderError.notLoggedIn("auth expired — re-login in Claude Code")
         case 429: throw ProviderError.badResponse("rate limited")
         default:  throw ProviderError.badResponse("HTTP \(http.statusCode)")
         }
-
-        let windows = try ClaudeUsageParser.parseWindows(data: data)
-        return UsageSnapshot(provider: id,
-                             windows: windows,
-                             fetchedAt: Date(),
-                             isStale: false)
     }
 }
 
