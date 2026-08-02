@@ -345,84 +345,94 @@ private struct SettingsView: View {
     let dismiss: () -> Void
 
     var body: some View {
+        // ScrollView is back so the window stays a reasonable size, but
+        // scroll indicators are hidden — the visible scrollbar was
+        // catching clicks meant for the delete buttons next to it.
+        // Trackpad / mousewheel scrolling still works.
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                        Text("Back")
-                    }
-                    .buttonStyle(.borderless)
-                    Spacer()
-                    Text("Settings").font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                    Text("Back")
                 }
-
-                Divider()
-
-                if let err = store.lastDeleteError {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        Text(err).font(.caption)
-                        Spacer()
-                        Button("Dismiss") { store.lastDeleteError = nil }
-                            .buttonStyle(.borderless).font(.caption)
-                    }
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.orange.opacity(0.15)))
-                }
-
-                // Providers, grouped by kind -----------------------------
-                Text("Providers").font(.subheadline).foregroundStyle(.secondary)
-                ProvidersSection()
-
-                Divider()
-
-                // Menu bar display --------------------------------------
-                Text("Menu bar display")
-                    .font(.subheadline).foregroundStyle(.secondary)
-
-                Toggle("Show every enabled provider",
-                       isOn: store.showAllProvidersBinding)
-                Text("Off: only the provider below appears in the menu bar. On: one icon per enabled provider.")
-                    .font(.caption2).foregroundStyle(.secondary)
-
-                Picker("Provider", selection: providerBinding) {
-                    ForEach(store.enabledProviders, id: \.id) { p in
-                        Text(store.effectiveDisplayName(for: p)).tag(p.id)
-                    }
-                }
-
-                Picker("Metric", selection: $store.menuBarWindowID) {
-                    Text("Worst window").tag(MenuBarWorstMetric)
-                    ForEach(store.activeProviderWindows) { w in
-                        Text(w.label).tag(w.id)
-                    }
-                }
-                .disabled(store.activeProviderWindows.isEmpty)
-
-                Toggle("Show percentage next to icon", isOn: $store.showPercentLabel)
-
-                Divider()
-
-                // Refresh -----------------------------------------------
-                Text("Refresh interval: \(Int(store.refreshInterval))s")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Slider(value: $store.refreshInterval,
-                       in: UsageStore.minRefreshInterval...600,
-                       step: 30)
-                Text("Anthropic and OpenAI rate-limit around 30s intervals with multiple accounts — 60s is the floor.")
-                    .font(.caption2).foregroundStyle(.secondary)
-
-                Divider()
-
-                // Diagnostics ------------------------------------------
-                DiagnosticsSection()
+                .buttonStyle(.borderless)
+                Spacer()
+                Text("Settings").font(.headline)
             }
+
+            Divider()
+
+            if let err = store.lastDeleteError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(err).font(.caption)
+                    Spacer()
+                    Button("Dismiss") { store.lastDeleteError = nil }
+                        .buttonStyle(.borderless).font(.caption)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.orange.opacity(0.15)))
+            }
+
+            // Providers, grouped by kind -----------------------------
+            Text("Providers").font(.subheadline).foregroundStyle(.secondary)
+            ProvidersSection()
+
+            Divider()
+
+            // Menu bar display --------------------------------------
+            Text("Menu bar display")
+                .font(.subheadline).foregroundStyle(.secondary)
+
+            Toggle("Show every provider in the menu bar",
+                   isOn: store.showAllProvidersBinding)
+            Text(store.showAllProvidersInMenuBar
+                 ? "One icon per provider, each colored by its own worst window.  The Provider and Metric pickers below only apply when this is off."
+                 : "A single icon.  Pick which provider and which window drive it below.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("Provider", selection: providerBinding) {
+                ForEach(store.enabledProviders, id: \.id) { p in
+                    Text(store.effectiveDisplayName(for: p)).tag(p.id)
+                }
+            }
+            .disabled(store.showAllProvidersInMenuBar)
+
+            Picker("Metric", selection: $store.menuBarWindowID) {
+                Text("Worst window").tag(MenuBarWorstMetric)
+                ForEach(store.activeProviderWindows) { w in
+                    Text(w.label).tag(w.id)
+                }
+            }
+            .disabled(store.activeProviderWindows.isEmpty
+                      || store.showAllProvidersInMenuBar)
+
+            Toggle("Show percentage next to icon", isOn: $store.showPercentLabel)
+
+            Divider()
+
+            // Refresh -----------------------------------------------
+            Text("Refresh interval: \(Int(store.refreshInterval))s")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Slider(value: $store.refreshInterval,
+                   in: UsageStore.minRefreshInterval...600,
+                   step: 30)
+            Text("Anthropic and OpenAI rate-limit around 30s intervals with multiple accounts — 60s is the floor.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            Divider()
+
+            // Diagnostics ------------------------------------------
+            DiagnosticsSection()
         }
+        }
+        .scrollIndicators(.hidden)
         .frame(maxHeight: 520)
     }
 
@@ -489,38 +499,76 @@ private struct DiagnosticsSection: View {
 // MARK: - Providers section (grouped by kind + add/remove for Claude/Codex)
 
 private struct ProvidersSection: View {
+    var body: some View { ProvidersFlatList() }
+}
+
+/// Big, obvious "Add Provider" entry.  Collapsed = a full-width prominent
+/// button.  Expanded = a compact pulldown for choosing which provider,
+/// with a real Connect button.  Multiple accounts per provider are
+/// allowed for every kind — Cursor / Copilot's single-vs-multi story is
+/// their own concern, not ours to police.
+private struct AddProviderPanel: View {
     @EnvironmentObject var store: UsageStore
+    @Binding var expanded: Bool
+    @State private var selectedKindID: String = "claude"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            KindGroup(kind: .claude,
-                      title: "Claude Code",
-                      providers: instances(prefix: "claude-code"))
-            KindGroup(kind: .codex,
-                      title: "ChatGPT · Codex",
-                      providers: instances(prefix: "codex"))
-            KindGroup(kind: nil,
-                      title: "Cursor",
-                      providers: instances(prefix: "cursor"))
-            KindGroup(kind: nil,
-                      title: "GitHub Copilot",
-                      providers: instances(prefix: "copilot"))
-        }
-    }
+        if !expanded {
+            Button {
+                expanded = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Add Provider")
+                        .font(.callout.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Which provider do you want to connect?")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Provider", selection: $selectedKindID) {
+                    ForEach(store.addableKinds) { kind in
+                        Text(kind.title).tag(kind.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
 
-    private func instances(prefix: String) -> [UsageProvider] {
-        // Settings shows every provider the registry knows about — even
-        // broken extras hidden from the tab bar — so the user can manage
-        // and delete them.
-        store.registry.providers.filter {
-            $0.id == prefix || $0.id.hasPrefix("\(prefix):")
+                if let subtitle = store.addableKinds
+                    .first(where: { $0.id == selectedKindID })?.subtitle {
+                    Text(subtitle)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") { expanded = false }
+                        .buttonStyle(.borderless)
+                    Button("Connect") {
+                        store.addProvider(kind: selectedKindID)
+                        expanded = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.gray.opacity(0.14)))
         }
     }
 }
 
-/// Settings row for a single account: enable toggle, account email
-/// subtitle, and an editable nickname field.  The nickname takes priority
-/// over the email in the tab bar / row header.
+/// Settings row for a single connected account: brand icon, effective
+/// name, email subtitle, nickname field, trash to remove.  No enable
+/// checkbox — being in this list *is* being enabled.
 private struct AccountRow: View {
     @EnvironmentObject var store: UsageStore
     let provider: UsageProvider
@@ -534,65 +582,55 @@ private struct AccountRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Toggle(store.effectiveDisplayName(for: provider),
-                       isOn: store.enabledBinding(provider.id))
-                    .toggleStyle(.checkbox)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if let img = BrandIcon.nsImage(asset: provider.iconAsset,
+                                                sfSymbol: provider.iconName,
+                                                color: .labelColor,
+                                                pointSize: 18) {
+                    Image(nsImage: img)
+                }
+                Text(store.effectiveDisplayName(for: provider))
+                    .font(.callout.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if isDuplicate {
-                    Text("duplicate")
-                        .font(.caption2)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.25))
-                        .foregroundStyle(.orange)
-                        .cornerRadius(4)
-                }
                 Spacer()
-                if isClaude {
-                    if confirmingDelete {
-                        Button("Cancel") { confirmingDelete = false }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                        Button {
-                            store.deleteClaudeAccount(providerID: provider.id)
-                            confirmingDelete = false
-                        } label: {
-                            Text(isDefaultClaude ? "Sign out" : "Delete")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                        .controlSize(.small)
-                    } else {
-                        Button {
-                            confirmingDelete = true
-                        } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .help(isDefaultClaude
-                              ? "Delete this account (signs you out of Claude Code!)"
-                              : "Delete this account's Keychain entry")
+                if confirmingDelete {
+                    Button("Cancel") { confirmingDelete = false }
+                        .buttonStyle(.borderless).font(.caption)
+                    Button("Remove") {
+                        store.removeProvider(provider.id)
+                        confirmingDelete = false
                     }
+                    .buttonStyle(.borderedProminent).tint(.red)
+                    .controlSize(.small)
+                } else {
+                    Button {
+                        confirmingDelete = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isClaude
+                          ? "Remove this account (deletes its Keychain entry)"
+                          : "Hide this account from UsageBar")
                 }
             }
             if confirmingDelete {
-                Text(isDefaultClaude
-                     ? "Signs you out of Claude Code on this Mac. You'll have to run `claude` to sign back in."
-                     : "Permanently removes this account's Keychain entry.")
+                Text(isClaude
+                     ? "Removes this Keychain entry.  You'll need to run `claude auth login` to use this install again."
+                     : "Hides this account from UsageBar.  The underlying sign-in in the source app is untouched.")
                     .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .padding(.leading, 20)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 26)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let email = store.accountLabel(for: provider.id),
                store.customLabel(for: provider.id) != nil {
                 Text(email)
                     .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.leading, 20)
+                    .padding(.leading, 26)
             }
             HStack(spacing: 6) {
                 Text("Nickname")
@@ -603,10 +641,9 @@ private struct AccountRow: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
             }
-            .padding(.leading, 20)
+            .padding(.leading, 26)
         }
-        .padding(.vertical, 2)
-        .opacity(isDuplicate ? 0.6 : 1.0)
+        .padding(.vertical, 3)
     }
 
     private var nicknamePlaceholder: String {
@@ -618,48 +655,25 @@ private struct AccountRow: View {
 
 }
 
-/// One provider kind and its detected instances.  Instances come from disk —
-/// there's no "Add" flow in the app.  For services that support isolated
-/// installs (Claude, Codex) we show a tiny hint on how to add another one.
-private struct KindGroup: View {
+/// The new flat providers list — connected accounts + a single
+/// "Add Provider" entry point.  No kind grouping, no enable/disable
+/// checkboxes — being in the list IS being enabled.
+private struct ProvidersFlatList: View {
     @EnvironmentObject var store: UsageStore
-    let kind: ProviderRegistry.Kind?    // .claude / .codex show the hint
-    let title: String
-    let providers: [UsageProvider]
+    @State private var expandAdd = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption).foregroundStyle(.secondary)
-
-            if providers.isEmpty {
-                Text("(no accounts detected)")
+        VStack(alignment: .leading, spacing: 8) {
+            let connected = store.connectedProviders
+            if connected.isEmpty {
+                Text("No providers connected yet.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(providers, id: \.id) { p in
+                ForEach(connected, id: \.id) { p in
                     AccountRow(provider: p)
                 }
             }
-
-            if kind == .claude {
-                Button {
-                    store.beginAddClaudeAccount()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add another Claude Code account")
-                    }
-                    .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .help("Opens a sign-in window inside UsageBar. No Terminal.")
-            } else if kind == .codex {
-                Text("Second Codex account? Run  CODEX_HOME=~/.codex-work codex login  in Terminal, then hit refresh.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .padding(.top, 2)
-            }
+            AddProviderPanel(expanded: $expandAdd)
         }
     }
 }

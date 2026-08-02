@@ -33,22 +33,33 @@ final class ProviderRegistry: ObservableObject {
     func rebuild() {
         var list: [UsageProvider] = []
 
-        // Claude — one instance per `Claude Code-credentials*` Keychain
-        // item.  The un-suffixed item is the default; every suffixed one
-        // is an additional account (created by a `claude auth login`
-        // under a different CLAUDE_CONFIG_DIR).
-        let services = ClaudeCredentials.discoverKeychainServices()
-        let hasDefault = services.contains("Claude Code-credentials")
-        if hasDefault {
-            list.append(ClaudeCodeProvider())
+        // Claude — one instance per unique account.  Multiple Keychain
+        // items can hold tokens for the same Anthropic user (that's what
+        // happens when you `claude auth login` from a different
+        // CLAUDE_CONFIG_DIR with the same account); we dedupe them here
+        // by the JWT `sub` claim so we never poll the same account twice
+        // per cycle and trip Anthropic's per-user rate limit.  Preference
+        // when there's a collision: keep the default (un-suffixed)
+        // Keychain item, since that's what plain `claude` uses.
+        let claudeItems = ClaudeCredentials.discoverKeychainItems()
+        var seenSubjects = Set<String>()
+        var addedDefault = false
+        for item in claudeItems {
+            if let sub = item.subject {
+                if seenSubjects.contains(sub) { continue }
+                seenSubjects.insert(sub)
+            }
+            if item.service == "Claude Code-credentials" {
+                list.append(ClaudeCodeProvider())
+                addedDefault = true
+            } else {
+                let suffix = String(item.service.dropFirst("Claude Code-credentials-".count))
+                list.append(ClaudeCodeProvider(keychainService: item.service, suffix: suffix))
+            }
         }
-        for service in services where service != "Claude Code-credentials" {
-            let suffix = String(service.dropFirst("Claude Code-credentials-".count))
-            list.append(ClaudeCodeProvider(keychainService: service, suffix: suffix))
-        }
-        // Fall back to the default even if no Keychain item exists — the
-        // popover shows the sign-in card in that case.
-        if !hasDefault && list.first(where: { $0.id == "claude-code" }) == nil {
+        // No Keychain items at all?  Still show the default so the popover
+        // has a sign-in card.
+        if !addedDefault && list.isEmpty {
             list.append(ClaudeCodeProvider())
         }
 
