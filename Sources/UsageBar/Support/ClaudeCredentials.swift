@@ -21,6 +21,12 @@ enum ClaudeCredentials {
     struct DiscoveredItem {
         let service: String
         let account: String?
+        /// The `sub` claim from this item's token — Anthropic's stable
+        /// user id.  Two Keychain items with the same `sub` belong to the
+        /// same account; the registry uses this to dedupe before polling
+        /// so we don't fight ourselves against Anthropic's per-user
+        /// rate-limit.  Nil if we can't read/parse the token.
+        let subject: String?
     }
 
     /// Every `Claude Code-credentials*` Keychain service on this Mac that
@@ -54,13 +60,33 @@ enum ClaudeCredentials {
                     || svc.hasPrefix("Claude Code-credentials-") else { continue }
             let acct = item[kSecAttrAccount as String] as? String
             guard looksLikeClaudeAccount(acct) else { continue }
-            out.append(DiscoveredItem(service: svc, account: acct))
+            // Try to decode the JWT sub — quick shell to `security`,
+            // then base64url decode of the middle segment.  If it fails
+            // (Keychain denies, token malformed) we still include the
+            // item and let the poll figure it out.
+            let sub = fromKeychain(service: svc).flatMap(subjectFromJWT)
+            out.append(DiscoveredItem(service: svc, account: acct, subject: sub))
         }
         return out.sorted { a, b in
             if a.service == "Claude Code-credentials" { return true }
             if b.service == "Claude Code-credentials" { return false }
             return a.service < b.service
         }
+    }
+
+    /// Decode `sub` from a JWT's payload without hitting the network.
+    /// Everything runs on-device.
+    static func subjectFromJWT(_ jwt: String) -> String? {
+        let parts = jwt.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64.append("=") }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sub = obj["sub"] as? String, !sub.isEmpty else { return nil }
+        return sub
     }
 
     /// Reject obvious non-Claude acct patterns.  Claude Code writes an

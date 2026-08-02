@@ -143,14 +143,39 @@ final class UsageStore: ObservableObject {
     func isEnabled(_ id: String)  -> Bool { !isDisabled(id) }
 
     /// Providers eligible to appear as tabs / drive the menu bar.  We
-    /// hide disabled ones and true duplicates, but we DO show broken /
-    /// rate-limited / auth-expired accounts — with a clear state
-    /// indicator and an action button — because "silently missing" is a
-    /// worse UX than "visibly needs attention".
+    /// hide "hidden" ones and duplicates, but show broken / rate-limited
+    /// / auth-expired accounts — with a clear state indicator — because
+    /// "silently missing" is worse UX than "visibly needs attention".
     var enabledProviders: [UsageProvider] {
         let dups = duplicateProviderIDs
         return registry.providers.filter { p in
-            !isDisabled(p.id) && !dups.contains(p.id)
+            isConnected(p.id) && !isDisabled(p.id) && !dups.contains(p.id)
+        }
+    }
+
+    /// A provider is "connected" for UX purposes iff it has credentials we
+    /// can actually poll.  Providers that report .notAvailable (other than
+    /// the initial "checking…" placeholder) are effectively not signed in
+    /// — they don't belong in the connected list, they belong behind the
+    /// "Add Provider" flow.
+    func isConnected(_ id: String) -> Bool {
+        switch statuses[id] {
+        case .none:
+            return true  // pre-first-poll, assume it'll work
+        case .some(.notAvailable(let reason)) where reason == "checking…":
+            return true
+        case .some(.notAvailable):
+            return false
+        default:
+            return true
+        }
+    }
+
+    /// The list Settings shows: everything that's connected and not hidden.
+    var connectedProviders: [UsageProvider] {
+        let dups = duplicateProviderIDs
+        return registry.providers.filter { p in
+            isConnected(p.id) && !isDisabled(p.id) && !dups.contains(p.id)
         }
     }
 
@@ -327,12 +352,15 @@ final class UsageStore: ObservableObject {
 
     var menuBarPercent: Double? { menuBarPercent(for: activeProviderID) }
 
-    /// Percent driving the glyph color/label for one provider.  The active
-    /// provider honors the user's chosen metric; every other provider shown
-    /// in the menu bar falls back to its worst window.
+    /// Percent driving the glyph color/label for one provider.
+    /// - Single-icon mode (Show All off): the icon reflects the specific
+    ///   window the user picked in Settings → Metric.
+    /// - Multi-icon mode (Show All on): every icon uniformly shows its
+    ///   provider's worst window.  The metric picker doesn't apply.
     func menuBarPercent(for providerID: String) -> Double? {
         guard case .some(.available(let snap)) = statuses[providerID] else { return nil }
-        if providerID == activeProviderID,
+        if !showAllProvidersInMenuBar,
+           providerID == activeProviderID,
            menuBarWindowID != MenuBarWorstMetric, !menuBarWindowID.isEmpty {
             return snap.windows.first { $0.id == menuBarWindowID }?.percentUsed
         }
@@ -375,31 +403,175 @@ final class UsageStore: ObservableObject {
         registry.rebuild()
     }
 
+    // MARK: - Add-Provider flow (kind-agnostic)
+
+    /// The list of provider kinds the user can add.  Claude and Codex
+    /// support multi-account so they're always addable; Cursor and
+    /// Copilot are single-instance so they're only addable when not
+    /// already connected.
+    struct AddableKind: Identifiable {
+        let id: String       // "claude" | "codex" | "cursor" | "copilot"
+        let title: String
+        let iconAsset: String?
+        let sfSymbol: String
+        let subtitle: String
+        let alreadyConnected: Bool
+    }
+
+    var addableKinds: [AddableKind] {
+        [
+            AddableKind(id: "claude", title: "Claude Code",
+                        iconAsset: "claude", sfSymbol: "sparkles",
+                        subtitle: "Sign in via browser.",
+                        alreadyConnected: false),
+            AddableKind(id: "codex", title: "ChatGPT · Codex",
+                        iconAsset: "openai", sfSymbol: "terminal",
+                        subtitle: "Sign in with `codex login` in Terminal.",
+                        alreadyConnected: false),
+            AddableKind(id: "cursor", title: "Cursor",
+                        iconAsset: "cursor", sfSymbol: "keyboard",
+                        subtitle: "Sign in inside Cursor.app.",
+                        alreadyConnected: false),
+            AddableKind(id: "copilot", title: "GitHub Copilot",
+                        iconAsset: "githubcopilot",
+                        sfSymbol: "chevron.left.forwardslash.chevron.right",
+                        subtitle: "Sign in via your editor's Copilot extension.",
+                        alreadyConnected: false),
+        ]
+    }
+
+    /// Un-hide + kick off the sign-in / connect flow for a provider kind.
+    func addProvider(kind kindID: String) {
+        switch kindID {
+        case "claude":
+            // Un-hide the default so if the flow succeeds, it shows up.
+            var disabled = disabledProviderIDs
+            disabled.remove("claude-code")
+            disabledIDsRaw = disabled.sorted().joined(separator: ",")
+            beginAddClaudeAccount()
+
+        case "codex":
+            if let codex = registry.provider(id: "codex") {
+                var disabled = disabledProviderIDs
+                disabled.remove("codex")
+                disabledIDsRaw = disabled.sorted().joined(separator: ",")
+                SignInLauncher.perform(codex.signInAction)
+                Task {
+                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                    await refreshOne(providerID: "codex")
+                }
+            }
+
+        case "cursor":
+            if let cursor = registry.provider(id: "cursor") {
+                var disabled = disabledProviderIDs
+                disabled.remove("cursor")
+                disabledIDsRaw = disabled.sorted().joined(separator: ",")
+                SignInLauncher.perform(cursor.signInAction)
+                Task {
+                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                    await refreshOne(providerID: "cursor")
+                }
+            }
+
+        case "copilot":
+            if let copilot = registry.provider(id: "copilot") {
+                var disabled = disabledProviderIDs
+                disabled.remove("copilot")
+                disabledIDsRaw = disabled.sorted().joined(separator: ",")
+                SignInLauncher.perform(copilot.signInAction)
+                Task {
+                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                    await refreshOne(providerID: "copilot")
+                }
+            }
+
+        default: break
+        }
+    }
+
+    /// Remove a provider from view.  For Claude, this deletes the
+    /// underlying Keychain items.  For everything else, we can't actually
+    /// nuke the credentials without disturbing another app, so we just
+    /// hide the provider in UsageBar (adds to disabled).
+    func removeProvider(_ providerID: String) {
+        if providerID == "claude-code" || providerID.hasPrefix("claude-code:") {
+            deleteClaudeAccount(providerID: providerID)
+        } else {
+            var disabled = disabledProviderIDs
+            disabled.insert(providerID)
+            disabledIDsRaw = disabled.sorted().joined(separator: ",")
+            statuses.removeValue(forKey: providerID)
+            if storedActiveID == providerID { storedActiveID = "" }
+            ensureActiveIsValid()
+            objectWillChange.send()
+        }
+    }
+
     /// Delete the Keychain item backing a Claude account.  Publishes the
     /// error string on failure so the UI can show what went wrong instead
     /// of the button appearing to do nothing.
     @Published var lastDeleteError: String?
 
+    /// Delete a Claude account.  Because we dedupe by JWT `sub`, a single
+    /// visible tab can be backed by several Keychain items (same
+    /// Anthropic user signed in from multiple CLAUDE_CONFIG_DIRs).  We
+    /// resolve the sub for the visible tab and remove **every** sibling
+    /// so "delete this account" actually makes it disappear instead of
+    /// dedup silently promoting a hidden duplicate to visible.
     func deleteClaudeAccount(providerID: String) {
         guard let p = registry.provider(id: providerID) as? ClaudeCodeProvider
         else {
             lastDeleteError = "provider \(providerID) not found"
             return
         }
-        switch ClaudeCredentials.deleteKeychainItem(service: p.keychainService) {
-        case .success:
-            lastDeleteError = nil
-            statuses.removeValue(forKey: providerID)
-            // Also drop any prefs referencing this instance.
-            if storedActiveID == providerID { storedActiveID = "" }
-            var disabled = disabledProviderIDs
-            if disabled.remove(providerID) != nil {
-                disabledIDsRaw = disabled.sorted().joined(separator: ",")
+
+        let items = ClaudeCredentials.discoverKeychainItems()
+        let targetSub = items.first(where: { $0.service == p.keychainService })?.subject
+        let toDelete: [String] = {
+            if let sub = targetSub {
+                return items.filter { $0.subject == sub }.map { $0.service }
             }
-            registry.rebuild()
-        case .failed(let reason):
-            lastDeleteError = "Delete failed: \(reason)"
+            return [p.keychainService]
+        }()
+
+        var failures: [String] = []
+        for svc in toDelete {
+            if case .failed(let reason) = ClaudeCredentials.deleteKeychainItem(service: svc) {
+                failures.append("\(svc): \(reason)")
+            }
         }
+
+        lastDeleteError = failures.isEmpty
+            ? nil
+            : "Delete failed:\n" + failures.joined(separator: "\n")
+
+        // Clean up per-provider state for every id that pointed at any of
+        // the deleted keychain services.
+        let deletedServices = Set(toDelete)
+        var disabled = disabledProviderIDs
+        for existing in registry.providers {
+            if let cp = existing as? ClaudeCodeProvider,
+               deletedServices.contains(cp.keychainService) {
+                statuses.removeValue(forKey: existing.id)
+                if storedActiveID == existing.id { storedActiveID = "" }
+                disabled.remove(existing.id)
+            }
+        }
+        disabledIDsRaw = disabled.sorted().joined(separator: ",")
+
+        // If the user just deleted every Claude Keychain item, hide the
+        // Claude Code tab entirely instead of showing an unsolicited
+        // "sign in" placeholder — they explicitly asked for the account
+        // to go away.  They can re-enable it in Settings when they want
+        // to sign in again.
+        let remaining = ClaudeCredentials.discoverKeychainItems()
+        if remaining.isEmpty {
+            disabled.insert("claude-code")
+            disabledIDsRaw = disabled.sorted().joined(separator: ",")
+        }
+
+        registry.rebuild()
     }
 
     /// Providers whose account emails duplicate another provider's — used
