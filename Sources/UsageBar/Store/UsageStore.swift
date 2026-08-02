@@ -73,9 +73,15 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Keep the active (menu-bar) provider pointing at something the UI
+    /// actually shows.  Validated against `enabledProviders` — not just
+    /// registry membership — so a provider that loses its credentials
+    /// (drops to .notAvailable) hands the menu bar to a live one instead
+    /// of lingering as a Picker selection with no matching option.
     private func ensureActiveIsValid() {
-        if storedActiveID.isEmpty || registry.provider(id: storedActiveID) == nil,
-           let first = enabledProviders.first {
+        let eligible = enabledProviders
+        guard !eligible.contains(where: { $0.id == storedActiveID }) else { return }
+        if let first = eligible.first {
             storedActiveID = first.id
             menuBarWindowID = MenuBarWorstMetric
         }
@@ -140,11 +146,11 @@ final class UsageStore: ObservableObject {
     }
 
     func isDisabled(_ id: String) -> Bool { disabledProviderIDs.contains(id) }
-    func isEnabled(_ id: String)  -> Bool { !isDisabled(id) }
 
     /// Providers eligible to appear as tabs / drive the menu bar.  We
-    /// hide "hidden" ones and duplicates, but show broken / rate-limited
-    /// / auth-expired accounts — with a clear state indicator — because
+    /// hide "hidden" ones, duplicates, and not-signed-in providers (those
+    /// live behind Add Provider), but we DO show errored / rate-limited /
+    /// auth-expired accounts — with a clear state indicator — because
     /// "silently missing" is worse UX than "visibly needs attention".
     var enabledProviders: [UsageProvider] {
         let dups = duplicateProviderIDs
@@ -171,15 +177,8 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// The list Settings shows: everything that's connected and not hidden.
-    var connectedProviders: [UsageProvider] {
-        let dups = duplicateProviderIDs
-        return registry.providers.filter { p in
-            isConnected(p.id) && !isDisabled(p.id) && !dups.contains(p.id)
-        }
-    }
-
-    private func isExtraInstance(_ id: String) -> Bool { id.contains(":") }
+    /// The list Settings shows — same eligibility rule as the tab bar.
+    var connectedProviders: [UsageProvider] { enabledProviders }
 
     /// Human-readable state for a provider tab: rate-limited, auth-expired,
     /// or normal.  Drives the warning chip + action button on the row.
@@ -208,36 +207,6 @@ final class UsageStore: ObservableObject {
             if lower.contains("auth") { return .authExpired }
             return .otherError(msg)
         }
-    }
-
-    func setEnabled(_ id: String, _ enabled: Bool) {
-        var disabled = disabledProviderIDs
-        if enabled { disabled.remove(id) } else { disabled.insert(id) }
-
-        // Refuse to disable the last one; snap the toggle back visually.
-        let remaining = registry.providers.filter { !disabled.contains($0.id) }
-        if remaining.isEmpty {
-            objectWillChange.send()
-            return
-        }
-        disabledIDsRaw = disabled.sorted().joined(separator: ",")
-
-        if enabled {
-            statuses[id] = .notAvailable("checking…")
-            Task { await refreshOne(providerID: id) }
-        } else {
-            statuses.removeValue(forKey: id)
-            if storedActiveID == id, let next = enabledProviders.first {
-                storedActiveID = next.id
-                menuBarWindowID = MenuBarWorstMetric
-            }
-        }
-        objectWillChange.send()
-    }
-
-    func enabledBinding(_ id: String) -> Binding<Bool> {
-        Binding(get: { self.isEnabled(id) },
-                set: { self.setEnabled(id, $0) })
     }
 
     // MARK: - Custom labels / display names
@@ -405,88 +374,67 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Add-Provider flow (kind-agnostic)
 
-    /// The list of provider kinds the user can add.  Claude and Codex
-    /// support multi-account so they're always addable; Cursor and
-    /// Copilot are single-instance so they're only addable when not
-    /// already connected.
+    /// The provider kinds the user can pick in the Add Provider panel.
+    /// Every kind is always offered — "already connected" gating was
+    /// deliberately dropped; per-service account limits are the service's
+    /// concern, not ours to police.
     struct AddableKind: Identifiable {
         let id: String       // "claude" | "codex" | "cursor" | "copilot"
         let title: String
         let iconAsset: String?
         let sfSymbol: String
         let subtitle: String
-        let alreadyConnected: Bool
     }
 
     var addableKinds: [AddableKind] {
         [
             AddableKind(id: "claude", title: "Claude Code",
                         iconAsset: "claude", sfSymbol: "sparkles",
-                        subtitle: "Sign in via browser.",
-                        alreadyConnected: false),
+                        subtitle: "Sign in via browser."),
             AddableKind(id: "codex", title: "ChatGPT · Codex",
                         iconAsset: "openai", sfSymbol: "terminal",
-                        subtitle: "Sign in with `codex login` in Terminal.",
-                        alreadyConnected: false),
+                        subtitle: "Sign in with `codex login` in Terminal."),
             AddableKind(id: "cursor", title: "Cursor",
                         iconAsset: "cursor", sfSymbol: "keyboard",
-                        subtitle: "Sign in inside Cursor.app.",
-                        alreadyConnected: false),
+                        subtitle: "Sign in inside Cursor.app."),
             AddableKind(id: "copilot", title: "GitHub Copilot",
                         iconAsset: "githubcopilot",
                         sfSymbol: "chevron.left.forwardslash.chevron.right",
-                        subtitle: "Sign in via your editor's Copilot extension.",
-                        alreadyConnected: false),
+                        subtitle: "Sign in via your editor's Copilot extension."),
         ]
     }
 
     /// Un-hide + kick off the sign-in / connect flow for a provider kind.
     func addProvider(kind kindID: String) {
-        switch kindID {
-        case "claude":
-            // Un-hide the default so if the flow succeeds, it shows up.
-            var disabled = disabledProviderIDs
-            disabled.remove("claude-code")
+        let prefix = kindID == "claude" ? "claude-code" : kindID
+
+        // Un-hide every instance of the kind, not just the base id — a
+        // hidden extra ("copilot:work") would otherwise be impossible to
+        // bring back from the UI.
+        var disabled = disabledProviderIDs
+        let hidden = disabled.filter { $0 == prefix || $0.hasPrefix("\(prefix):") }
+        if !hidden.isEmpty {
+            disabled.subtract(hidden)
             disabledIDsRaw = disabled.sorted().joined(separator: ",")
+        }
+
+        if kindID == "claude" {
             beginAddClaudeAccount()
+            return
+        }
 
-        case "codex":
-            if let codex = registry.provider(id: "codex") {
-                var disabled = disabledProviderIDs
-                disabled.remove("codex")
-                disabledIDsRaw = disabled.sorted().joined(separator: ",")
-                SignInLauncher.perform(codex.signInAction)
-                Task {
-                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
-                    await refreshOne(providerID: "codex")
-                }
+        // Multi-account kinds may have no base-id instance at all (two
+        // Copilot accounts register only "copilot:a" / "copilot:b"), so
+        // launch the sign-in surface from any instance — the action is
+        // identical across a kind.
+        guard let p = registry.providers.first(where: { kindPrefix($0.id) == prefix })
+        else { return }
+        SignInLauncher.perform(p.signInAction)
+        Task {
+            try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+            for id in registry.providers.map(\.id) where kindPrefix(id) == prefix {
+                await refreshOne(providerID: id)
             }
-
-        case "cursor":
-            if let cursor = registry.provider(id: "cursor") {
-                var disabled = disabledProviderIDs
-                disabled.remove("cursor")
-                disabledIDsRaw = disabled.sorted().joined(separator: ",")
-                SignInLauncher.perform(cursor.signInAction)
-                Task {
-                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
-                    await refreshOne(providerID: "cursor")
-                }
-            }
-
-        case "copilot":
-            if let copilot = registry.provider(id: "copilot") {
-                var disabled = disabledProviderIDs
-                disabled.remove("copilot")
-                disabledIDsRaw = disabled.sorted().joined(separator: ",")
-                SignInLauncher.perform(copilot.signInAction)
-                Task {
-                    try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
-                    await refreshOne(providerID: "copilot")
-                }
-            }
-
-        default: break
         }
     }
 
@@ -536,8 +484,12 @@ final class UsageStore: ObservableObject {
         }()
 
         var failures: [String] = []
+        var succeeded: Set<String> = []
         for svc in toDelete {
-            if case .failed(let reason) = ClaudeCredentials.deleteKeychainItem(service: svc) {
+            switch ClaudeCredentials.deleteKeychainItem(service: svc) {
+            case .success:
+                succeeded.insert(svc)
+            case .failed(let reason):
                 failures.append("\(svc): \(reason)")
             }
         }
@@ -546,9 +498,10 @@ final class UsageStore: ObservableObject {
             ? nil
             : "Delete failed:\n" + failures.joined(separator: "\n")
 
-        // Clean up per-provider state for every id that pointed at any of
-        // the deleted keychain services.
-        let deletedServices = Set(toDelete)
+        // Clean up per-provider state only for services that actually got
+        // deleted — a partial failure must not orphan the surviving
+        // account's status or prefs.
+        let deletedServices = succeeded
         var disabled = disabledProviderIDs
         for existing in registry.providers {
             if let cp = existing as? ClaudeCodeProvider,
@@ -746,6 +699,7 @@ final class UsageStore: ObservableObject {
                 applyResult(id: id, status: status)
             }
         }
+        ensureActiveIsValid()
         lastRefreshedAt = Date()
     }
 
@@ -754,6 +708,7 @@ final class UsageStore: ObservableObject {
         backoffUntil.removeValue(forKey: providerID)
         let (id, status) = await Self.fetch(provider: p)
         applyResult(id: id, status: status)
+        ensureActiveIsValid()
     }
 
     private func applyResult(id: String, status: ProviderStatus) {

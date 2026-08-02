@@ -60,11 +60,16 @@ enum ClaudeCredentials {
                     || svc.hasPrefix("Claude Code-credentials-") else { continue }
             let acct = item[kSecAttrAccount as String] as? String
             guard looksLikeClaudeAccount(acct) else { continue }
-            // Try to decode the JWT sub — quick shell to `security`,
-            // then base64url decode of the middle segment.  If it fails
+            // Try to decode the JWT sub — shell to `security`, then
+            // base64url decode of the middle segment.  If it fails
             // (Keychain denies, token malformed) we still include the
-            // item and let the poll figure it out.
-            let sub = fromKeychain(service: svc).flatMap(subjectFromJWT)
+            // item and let the poll figure it out.  Cached: the registry
+            // rebuilds on the main actor every poll cycle, and one
+            // `security -w` per item per rebuild means periodic UI
+            // freezes (5 s timeout each) and re-triggered Keychain
+            // prompts.
+            let modified = item[kSecAttrModificationDate as String] as? Date
+            let sub = cachedSubject(service: svc, account: acct, modified: modified)
             out.append(DiscoveredItem(service: svc, account: acct, subject: sub))
         }
         return out.sorted { a, b in
@@ -72,6 +77,41 @@ enum ClaudeCredentials {
             if b.service == "Claude Code-credentials" { return false }
             return a.service < b.service
         }
+    }
+
+    /// Decoded-subject cache.  Keyed by service + account + the item's
+    /// Keychain modification date, so a re-login (which rewrites the item)
+    /// naturally invalidates the entry — including cached decode failures.
+    private static let subjectCacheLock = NSLock()
+    private static var subjectCache: [String: String?] = [:]
+
+    private static func cachedSubject(service: String,
+                                      account: String?,
+                                      modified: Date?) -> String? {
+        let key = "\(service)|\(account ?? "")|\(modified?.timeIntervalSince1970 ?? 0)"
+        subjectCacheLock.lock()
+        if let hit = subjectCache[key] {
+            subjectCacheLock.unlock()
+            return hit
+        }
+        subjectCacheLock.unlock()
+
+        let sub = fromKeychain(service: service).flatMap(subjectFromJWT)
+
+        subjectCacheLock.lock()
+        // updateValue, not subscript: stores the entry even when sub is
+        // nil, so decode *failures* are cached too — otherwise a denied
+        // Keychain item would re-shell `security` every rebuild, which is
+        // exactly the freeze this cache exists to prevent.
+        subjectCache.updateValue(sub, forKey: key)
+        // Drop superseded entries for the same service so re-logins don't
+        // accumulate stale keys.
+        for k in Array(subjectCache.keys)
+        where k.hasPrefix("\(service)|") && k != key {
+            subjectCache.removeValue(forKey: k)
+        }
+        subjectCacheLock.unlock()
+        return sub
     }
 
     /// Decode `sub` from a JWT's payload without hitting the network.

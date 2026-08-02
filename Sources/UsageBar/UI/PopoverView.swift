@@ -619,7 +619,7 @@ private struct AccountRow: View {
             }
             if confirmingDelete {
                 Text(isClaude
-                     ? "Removes this Keychain entry.  You'll need to run `claude auth login` to use this install again."
+                     ? "Removes this account's Keychain entries — including any sibling install signed in to the same account.  You'll need to run `claude auth login` to use them again."
                      : "Hides this account from UsageBar.  The underlying sign-in in the source app is untouched.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
