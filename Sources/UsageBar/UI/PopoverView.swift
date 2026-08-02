@@ -386,7 +386,7 @@ private struct SettingsView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
 
                 Toggle("Show every enabled provider",
-                       isOn: $store.showAllProvidersInMenuBar)
+                       isOn: store.showAllProvidersBinding)
                 Text("Off: only the provider below appears in the menu bar. On: one icon per enabled provider.")
                     .font(.caption2).foregroundStyle(.secondary)
 

@@ -346,6 +346,14 @@ final class UsageStore: ObservableObject {
         return registry.provider(id: activeProviderID).map { [$0] } ?? []
     }
 
+    /// @AppStorage doesn't feed objectWillChange, so the menu bar label
+    /// wouldn't notice the toggle until the next poll — nudge it manually.
+    var showAllProvidersBinding: Binding<Bool> {
+        Binding(get: { self.showAllProvidersInMenuBar },
+                set: { self.showAllProvidersInMenuBar = $0
+                       self.objectWillChange.send() })
+    }
+
     var activeProviderWindows: [UsageWindow] {
         if case .some(.available(let snap)) = activeStatus { return snap.windows }
         return []
