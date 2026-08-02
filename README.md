@@ -24,14 +24,25 @@ one small file, not a rewrite.
 - Menu bar glyph shows the active provider's own brand mark, tinted **green**
   (< 70 %), **yellow** (70–90 %), or **red** (≥ 90 %) off the worst window.
 - Optional percentage label next to the icon.
-- Popover lists every enabled provider with per-window progress bars and
-  reset countdowns ("in 30d 3h", "in 12m").
-- Settings pane: toggle which providers appear, pick which provider + which
-  specific window drives the menu bar, adjust the poll interval.
-- Sign-in helper per provider — one-click into Terminal (`claude`,
-  `codex login`), the Cursor app, or the GitHub Copilot docs.
-- Failure smoothing: two consecutive failed polls flip the row to "stale"
-  instead of an error string; last known snapshot stays visible.
+- Popover tabs — one per account across all providers — each with per-window
+  progress bars and reset countdowns ("in 30d 3h", "in 12m").
+- **Multi-account.** Multiple Claude Code accounts (each on its own
+  `CLAUDE_CONFIG_DIR`) are auto-discovered from the login Keychain, one tab
+  per account. GitHub Copilot multi-account works natively from `apps.json`.
+- **One-button add-Claude-account** — opens a fresh sign-in for a second
+  Anthropic account inside UsageBar, no Terminal, browser-based OAuth via
+  your system default browser (so Google-signed-in accounts work too).
+- **Per-account nicknames** — keyed by the account's email so they survive
+  the underlying Keychain item being re-created.
+- **Sign-in helper per provider** — one-click into Terminal (`codex login`),
+  the Cursor app, or the GitHub Copilot docs, depending on the service.
+- **Silent failure handling** — 429s and transient errors never surface to
+  the user; the last known snapshot keeps showing while the app quietly
+  backs off. Only sign-in-expired states get a small inline "Reconnect" link.
+- **Delete** any account (default or extra) from Settings — removes the
+  Keychain item, tab disappears immediately.
+- **Diagnostics** — one-click "Copy diagnostics" in Settings dumps the app's
+  full state (no credential data) so bug reports are actually actionable.
 - No dock icon (`LSUIElement`), no analytics, no accounts, no daemon.
 
 ## Providers
@@ -88,8 +99,10 @@ Right-click / left-click the icon → **Settings** (gear):
   being polled and disappear from the popover.
 - **Menu bar display** — which provider and which specific window (or
   "Worst window") drives the icon color. Toggle the percent label on/off.
-- **Refresh interval** — 30 s to 300 s. The 30 s floor is a courtesy to the
-  undocumented endpoints; please don't lower it further.
+- **Refresh interval** — 60 s to 600 s (default 120 s). 60 s is the floor
+  — Anthropic's undocumented endpoints rate-limit hard below that once you
+  have multiple accounts. The app also caches profile lookups for 30 min
+  and silently backs off on 429s so you shouldn't need to touch this.
 
 ## Adding a provider
 

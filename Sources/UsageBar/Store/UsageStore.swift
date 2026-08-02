@@ -21,7 +21,7 @@ final class UsageStore: ObservableObject {
     @AppStorage("activeProviderID") private var storedActiveID: String = ""
     @AppStorage("menuBarWindowID")  var menuBarWindowID: String = MenuBarWorstMetric
     @AppStorage("disabledProviderIDs") private var disabledIDsRaw: String = ""
-    @AppStorage("refreshIntervalSeconds") var refreshInterval: Double = 60
+    @AppStorage("refreshIntervalSeconds") var refreshInterval: Double = 120
     @AppStorage("showPercentLabel") var showPercentLabel: Bool = true
     /// User-chosen nicknames per provider id, JSON-encoded.
     @AppStorage("customLabels") private var customLabelsRaw: String = "{}"
@@ -29,9 +29,22 @@ final class UsageStore: ObservableObject {
     private var timerTask: Task<Void, Never>?
     private var consecutiveFailures: [String: Int] = [:]
     private var registryCancellable: AnyCancellable?
+    /// Per-provider "don't poll again until" timestamp — set silently when
+    /// we hit a 429 so we don't hammer an endpoint that's already told us
+    /// to wait.  This is entirely invisible to the user; the tab keeps
+    /// showing whatever we last saw.
+    private var backoffUntil: [String: Date] = [:]
+    /// Minimum poll interval we'll ever honor.  30s used to be the floor
+    /// but that reliably provokes 429 from Anthropic once you have two
+    /// Claude accounts (usage + profile = 8 req/min) — 60s is polite.
+    static let minRefreshInterval: Double = 60
 
     init(registry: ProviderRegistry) {
         self.registry = registry
+        // Migrate existing installs that had the old 30 s floor.
+        if refreshInterval < Self.minRefreshInterval {
+            refreshInterval = Self.minRefreshInterval
+        }
         seedPlaceholders()
         ensureActiveIsValid()
 
@@ -69,16 +82,40 @@ final class UsageStore: ObservableObject {
 
     private func reconcileWithRegistry() {
         let liveIDs = Set(registry.providers.map(\.id))
-        // Drop statuses / failure counts for instances that no longer exist.
         for id in Array(statuses.keys) where !liveIDs.contains(id) {
             statuses.removeValue(forKey: id)
             consecutiveFailures.removeValue(forKey: id)
+            backoffUntil.removeValue(forKey: id)
         }
-        // Placeholder + immediate refresh for anything new & enabled.
         let newIDs = liveIDs.subtracting(statuses.keys)
         for id in newIDs where !isDisabled(id) {
             statuses[id] = .notAvailable("checking…")
             Task { await refreshOne(providerID: id) }
+        }
+        // Prune ghost prefs left behind when we delete an account so
+        // preferences don't accumulate corpses across sessions.
+        var disabled = disabledProviderIDs
+        let disabledGhosts = disabled.subtracting(liveIDs)
+        if !disabledGhosts.isEmpty {
+            disabled.subtract(disabledGhosts)
+            disabledIDsRaw = disabled.sorted().joined(separator: ",")
+        }
+        // Only prune label keys that look like provider ids (contain ":" or
+        // match a known kind prefix).  Email-keyed labels are kept forever
+        // — they'll re-attach to the account next time it appears.
+        var labels = customLabels
+        let looksLikeProviderID: (String) -> Bool = { key in
+            key.contains(":")
+                || ["claude-code","codex","cursor","copilot"].contains(key)
+        }
+        let candidates = Set(labels.keys.filter(looksLikeProviderID))
+        let ghosts = candidates.subtracting(liveIDs)
+        if !ghosts.isEmpty {
+            for k in ghosts { labels.removeValue(forKey: k) }
+            if let data = try? JSONEncoder().encode(labels),
+               let str = String(data: data, encoding: .utf8) {
+                customLabelsRaw = str
+            }
         }
         ensureActiveIsValid()
         objectWillChange.send()
@@ -104,9 +141,47 @@ final class UsageStore: ObservableObject {
     func isDisabled(_ id: String) -> Bool { disabledProviderIDs.contains(id) }
     func isEnabled(_ id: String)  -> Bool { !isDisabled(id) }
 
+    /// Providers eligible to appear as tabs / drive the menu bar.  We
+    /// hide disabled ones and true duplicates, but we DO show broken /
+    /// rate-limited / auth-expired accounts — with a clear state
+    /// indicator and an action button — because "silently missing" is a
+    /// worse UX than "visibly needs attention".
     var enabledProviders: [UsageProvider] {
         let dups = duplicateProviderIDs
-        return registry.providers.filter { !isDisabled($0.id) && !dups.contains($0.id) }
+        return registry.providers.filter { p in
+            !isDisabled(p.id) && !dups.contains(p.id)
+        }
+    }
+
+    private func isExtraInstance(_ id: String) -> Bool { id.contains(":") }
+
+    /// Human-readable state for a provider tab: rate-limited, auth-expired,
+    /// or normal.  Drives the warning chip + action button on the row.
+    enum ProviderHealth {
+        case ok, checking, notSignedIn, rateLimited(retryAt: Date?), authExpired, otherError(String)
+    }
+
+    func health(for providerID: String) -> ProviderHealth {
+        if let until = backoffUntil[providerID], until > Date() {
+            return .rateLimited(retryAt: until)
+        }
+        switch statuses[providerID] {
+        case .none:
+            return .checking
+        case .some(.notAvailable(let r)) where r == "checking…":
+            return .checking
+        case .some(.available):
+            return .ok
+        case .some(.notAvailable):
+            return .notSignedIn
+        case .some(.error(let msg)):
+            let lower = msg.lowercased()
+            if lower.contains("rate limited") {
+                return .rateLimited(retryAt: backoffUntil[providerID])
+            }
+            if lower.contains("auth") { return .authExpired }
+            return .otherError(msg)
+        }
     }
 
     func setEnabled(_ id: String, _ enabled: Bool) {
@@ -140,6 +215,13 @@ final class UsageStore: ObservableObject {
     }
 
     // MARK: - Custom labels / display names
+    //
+    // We store nicknames by *account identity* (email) whenever we know it,
+    // and fall back to the provider id for accounts that haven't fetched a
+    // profile yet.  Keying by email means a nickname survives Claude Code
+    // creating a new Keychain item (different hash) for the same account —
+    // which is exactly what happens when the user re-signs in from another
+    // CLAUDE_CONFIG_DIR or after a restart.
 
     private var customLabels: [String: String] {
         guard let data = customLabelsRaw.data(using: .utf8),
@@ -148,18 +230,44 @@ final class UsageStore: ObservableObject {
         return dict
     }
 
+    /// Best identity key we have for this provider.  Prefer email; fall back
+    /// to provider id (used for accounts that haven't polled successfully yet).
+    private func labelKeys(for providerID: String) -> [String] {
+        var keys: [String] = []
+        if let email = accountLabel(for: providerID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            keys.append(email.lowercased())
+        }
+        keys.append(providerID)
+        return keys
+    }
+
     func customLabel(for providerID: String) -> String? {
-        let raw = customLabels[providerID]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (raw?.isEmpty == false) ? raw : nil
+        for key in labelKeys(for: providerID) {
+            if let val = customLabels[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !val.isEmpty {
+                return val
+            }
+        }
+        return nil
     }
 
     func setCustomLabel(_ label: String, for providerID: String) {
         var dict = customLabels
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Prefer the email as the storage key so this label survives the
+        // account being re-signed-in with a different Keychain hash.
+        let primaryKey = labelKeys(for: providerID).first ?? providerID
+        // Cleanup any stray copies under the id key so future email lookups
+        // don't disagree with themselves.
+        for key in labelKeys(for: providerID) where key != primaryKey {
+            dict.removeValue(forKey: key)
+        }
         if trimmed.isEmpty {
-            dict.removeValue(forKey: providerID)
+            dict.removeValue(forKey: primaryKey)
         } else {
-            dict[providerID] = trimmed
+            dict[primaryKey] = trimmed
         }
         if let data = try? JSONEncoder().encode(dict),
            let str  = String(data: data, encoding: .utf8) {
@@ -245,16 +353,31 @@ final class UsageStore: ObservableObject {
         registry.rebuild()
     }
 
-    /// Delete the Keychain item backing a Claude account.  The tab
-    /// disappears on the next registry rebuild.  Deleting the default
-    /// item signs the user out of Claude Code in every editor — the UI
-    /// confirmation dialog spells this out.
+    /// Delete the Keychain item backing a Claude account.  Publishes the
+    /// error string on failure so the UI can show what went wrong instead
+    /// of the button appearing to do nothing.
+    @Published var lastDeleteError: String?
+
     func deleteClaudeAccount(providerID: String) {
         guard let p = registry.provider(id: providerID) as? ClaudeCodeProvider
-        else { return }
-        _ = ClaudeCredentials.deleteKeychainItem(service: p.keychainService)
-        statuses.removeValue(forKey: providerID)
-        registry.rebuild()
+        else {
+            lastDeleteError = "provider \(providerID) not found"
+            return
+        }
+        switch ClaudeCredentials.deleteKeychainItem(service: p.keychainService) {
+        case .success:
+            lastDeleteError = nil
+            statuses.removeValue(forKey: providerID)
+            // Also drop any prefs referencing this instance.
+            if storedActiveID == providerID { storedActiveID = "" }
+            var disabled = disabledProviderIDs
+            if disabled.remove(providerID) != nil {
+                disabledIDsRaw = disabled.sorted().joined(separator: ",")
+            }
+            registry.rebuild()
+        case .failed(let reason):
+            lastDeleteError = "Delete failed: \(reason)"
+        }
     }
 
     /// Providers whose account emails duplicate another provider's — used
@@ -285,6 +408,75 @@ final class UsageStore: ObservableObject {
 
     private func kindPrefix(_ id: String) -> String {
         id.split(separator: ":").first.map(String.init) ?? id
+    }
+
+    // MARK: - Diagnostics
+
+    /// A plain-text snapshot of everything UsageBar sees right now.  The
+    /// user can copy this from Settings and paste into an issue / email so
+    /// we can debug without asking "what does yours show?" for 3 rounds.
+    /// Deliberately excludes any credential data.
+    func diagnosticsReport() -> String {
+        var out: [String] = []
+        out.append("== UsageBar diagnostics ==")
+        out.append("time: \(ISO8601DateFormatter().string(from: Date()))")
+
+        out.append("")
+        out.append("== preferences ==")
+        out.append("activeProviderID:      \(storedActiveID.isEmpty ? "(unset)" : storedActiveID)")
+        out.append("menuBarWindowID:       \(menuBarWindowID)")
+        out.append("refreshInterval:       \(Int(refreshInterval))s")
+        out.append("showPercentLabel:      \(showPercentLabel)")
+        out.append("disabledProviderIDs:   \(disabledIDsRaw.isEmpty ? "(none)" : disabledIDsRaw)")
+
+        out.append("")
+        out.append("== Claude Keychain items (attribute-only) ==")
+        let items = ClaudeCredentials.discoverKeychainItems()
+        if items.isEmpty {
+            out.append("(none passed the filter)")
+        } else {
+            for it in items {
+                out.append("- svc=\(it.service)  acct=\(it.account ?? "(nil)")")
+            }
+        }
+
+        out.append("")
+        out.append("== registered providers (\(registry.providers.count)) ==")
+        let dups = duplicateProviderIDs
+        for p in registry.providers {
+            let flags = [
+                isDisabled(p.id) ? "disabled" : nil,
+                dups.contains(p.id) ? "duplicate" : nil,
+                storedActiveID == p.id ? "active" : nil,
+            ].compactMap { $0 }.joined(separator: ",")
+            let flagText = flags.isEmpty ? "" : "  [\(flags)]"
+            out.append("- \(p.id)\(flagText)")
+            out.append("    displayName:  \(p.displayName)")
+            out.append("    effective:    \(effectiveDisplayName(for: p))")
+            if let email = accountLabel(for: p.id) {
+                out.append("    email:        \(email)")
+            }
+            if let custom = customLabel(for: p.id) {
+                out.append("    nickname:     \(custom)")
+            }
+            switch statuses[p.id] {
+            case .some(.available(let snap)):
+                out.append("    status:       available (\(snap.windows.count) windows, worst=\(Int(snap.worstPercent * 100))%)\(snap.isStale ? " STALE" : "")")
+            case .some(.notAvailable(let hint)):
+                out.append("    status:       notAvailable — \(hint)")
+            case .some(.error(let msg)):
+                out.append("    status:       error — \(msg)")
+            case .none:
+                out.append("    status:       (no snapshot yet)")
+            }
+        }
+
+        if let err = lastDeleteError {
+            out.append("")
+            out.append("== last delete error ==")
+            out.append(err)
+        }
+        return out.joined(separator: "\n")
     }
 
     /// One-click, zero-Terminal add-a-Claude-account flow.  Opens a
@@ -339,12 +531,18 @@ final class UsageStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // A manual refresh doubles as a rescan — cheap, and it lets the
-        // user pick up a freshly-signed-in ~/.claude-work without quitting.
         registry.rebuild()
 
+        // Only poll providers not currently in a backoff window.  Registry
+        // includes disabled/dup-hidden ones so we still refresh them for
+        // Settings visibility.
+        let now = Date()
+        let due = registry.providers.filter { p in
+            !isDisabled(p.id) && (backoffUntil[p.id].map { $0 <= now } ?? true)
+        }
+
         await withTaskGroup(of: (String, ProviderStatus).self) { group in
-            for provider in enabledProviders {
+            for provider in due {
                 group.addTask {
                     await Self.fetch(provider: provider)
                 }
@@ -358,24 +556,39 @@ final class UsageStore: ObservableObject {
 
     func refreshOne(providerID: String) async {
         guard let p = registry.provider(id: providerID), !isDisabled(providerID) else { return }
+        backoffUntil.removeValue(forKey: providerID)
         let (id, status) = await Self.fetch(provider: p)
         applyResult(id: id, status: status)
     }
 
     private func applyResult(id: String, status: ProviderStatus) {
-        // Failure smoothing: after 2 consecutive errors we mark the previous
-        // snapshot stale rather than replacing it with an error string, so the
-        // popover keeps showing something useful.
-        if case .error = status {
+        if case .error(let msg) = status {
+            let lower = msg.lowercased()
+            // 429 → back off silently for 5 minutes.  Don't blame the user.
+            if lower.contains("rate limited") {
+                backoffUntil[id] = Date().addingTimeInterval(300)
+                // Absolutely never replace live data with an error string
+                // for a transient thing — keep last snapshot visible.
+                if case .available = statuses[id] { return }
+                // No prior snapshot either?  Leave whatever placeholder
+                // was there ("checking…") — don't downgrade to an error.
+                return
+            }
             let n = (consecutiveFailures[id] ?? 0) + 1
             consecutiveFailures[id] = n
-            if n >= 2, case .available(var snap) = statuses[id] {
+            // Non-auth transient errors: keep last data, mark stale after 2.
+            if !lower.contains("auth"),
+               n >= 2, case .available(var snap) = statuses[id] {
                 snap.isStale = true
                 statuses[id] = .available(snap)
                 return
             }
+            // For anything else (auth-expired, decoding, tokenMissing)
+            // we DO set an error status — that's a real state the user
+            // needs to know about so they can reconnect.
         } else {
             consecutiveFailures[id] = 0
+            backoffUntil.removeValue(forKey: id)
         }
         statuses[id] = status
     }
@@ -413,7 +626,8 @@ final class UsageStore: ObservableObject {
         timerTask?.cancel()
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
-                let interval = max(30.0, self?.refreshInterval ?? 60)
+                let interval = max(Self.minRefreshInterval,
+                                   self?.refreshInterval ?? 90)
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 await self?.refreshNow()
             }

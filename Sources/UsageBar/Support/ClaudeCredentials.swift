@@ -18,9 +18,25 @@ import Security
 // fallback for a specific service if Keychain returns nothing.
 enum ClaudeCredentials {
 
-    /// Every `Claude Code-credentials*` Keychain service on this Mac.
-    /// Attribute-only lookup — doesn't trigger a Keychain access prompt.
+    struct DiscoveredItem {
+        let service: String
+        let account: String?
+    }
+
+    /// Every `Claude Code-credentials*` Keychain service on this Mac that
+    /// *plausibly* belongs to Claude Code.  Attribute-only lookup — no
+    /// Keychain access prompt.
+    ///
+    /// The service-name prefix alone isn't enough of a filter: after a
+    /// clean restart we've seen unrelated Apple items (Handoff encryption
+    /// keys, legacy "No user account" placeholders from 2020) share the
+    /// same prefix.  We additionally reject items whose `acct` attribute
+    /// clearly isn't a Claude user identifier.
     static func discoverKeychainServices() -> [String] {
+        discoverKeychainItems().map(\.service)
+    }
+
+    static func discoverKeychainItems() -> [DiscoveredItem] {
         let query: [String: Any] = [
             kSecClass as String:            kSecClassGenericPassword,
             kSecReturnAttributes as String: true,
@@ -31,21 +47,38 @@ enum ClaudeCredentials {
         guard status == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
 
-        var services: [String] = []
+        var out: [DiscoveredItem] = []
         for item in items {
-            guard let svc = item[kSecAttrService as String] as? String else { continue }
-            if svc == "Claude Code-credentials"
-                || svc.hasPrefix("Claude Code-credentials-") {
-                services.append(svc)
-            }
+            guard let svc = item[kSecAttrService as String] as? String,
+                  svc == "Claude Code-credentials"
+                    || svc.hasPrefix("Claude Code-credentials-") else { continue }
+            let acct = item[kSecAttrAccount as String] as? String
+            guard looksLikeClaudeAccount(acct) else { continue }
+            out.append(DiscoveredItem(service: svc, account: acct))
         }
-        // Default first; then remaining sorted so ordering is stable
-        // across scans and matches whatever hash algorithm Claude uses.
-        return services.sorted { a, b in
-            if a == "Claude Code-credentials" { return true }
-            if b == "Claude Code-credentials" { return false }
-            return a < b
+        return out.sorted { a, b in
+            if a.service == "Claude Code-credentials" { return true }
+            if b.service == "Claude Code-credentials" { return false }
+            return a.service < b.service
         }
+    }
+
+    /// Reject obvious non-Claude acct patterns.  Claude Code writes an
+    /// email or username here (e.g. "agiveon", "amir@example.com").  Apple
+    /// system items write things like "handoff-own-encryption-key" or
+    /// "No user account".
+    private static func looksLikeClaudeAccount(_ acct: String?) -> Bool {
+        guard let acct, !acct.isEmpty else { return false }
+        let lower = acct.lowercased()
+        let rejectedExact: Set<String> = ["no user account", "nil", "-", "(null)"]
+        if rejectedExact.contains(lower) { return false }
+        let rejectedPrefixes = [
+            "handoff-", "com.apple.", "apple-", "icloud-", "iwork-",
+        ]
+        if rejectedPrefixes.contains(where: { lower.hasPrefix($0) }) { return false }
+        // Reject strings with whitespace — real usernames / emails don't have any.
+        if acct.contains(where: { $0.isWhitespace }) { return false }
+        return true
     }
 
     /// Read the access token from a specific Keychain service.  Falls back
@@ -93,14 +126,26 @@ enum ClaudeCredentials {
     }
 
     /// Permanently delete a `Claude Code-credentials*` Keychain item.  Used
-    /// by the Settings "Delete" button to clean up orphans from failed
-    /// prior sign-in attempts.
-    static func deleteKeychainItem(service: String) -> Bool {
-        let ok = ShellRunner.run(
+    /// by the Settings "Delete" button.  Returns `.success` when the item
+    /// is gone (or was never there), `.failed(reason)` otherwise so the
+    /// UI can surface a real message rather than silently no-op.
+    enum DeleteResult {
+        case success
+        case failed(reason: String)
+    }
+    static func deleteKeychainItem(service: String) -> DeleteResult {
+        let result = ShellRunner.runDetailed(
             "/usr/bin/security",
             args: ["delete-generic-password", "-s", service],
             timeout: 5.0
         )
-        return ok != nil
+        if result.exit == 0 { return .success }
+        // Exit 44 = SecKeychainSearchCopyNext "item not found" — for our
+        // purposes that's fine, the item is already gone.
+        if result.exit == 44 { return .success }
+        let msg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .failed(reason: msg.isEmpty
+                       ? "security exit \(result.exit)"
+                       : msg)
     }
 }

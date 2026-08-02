@@ -36,11 +36,20 @@ and what it does with the contents:
 
 | Source | Read every | Kept in memory | Written anywhere |
 |---|---|---|---|
-| Keychain item `Claude Code-credentials` (via `security find-generic-password`) | poll (default 60 s) | duration of one HTTP request | never |
-| `~/.claude/.credentials.json` | poll | duration of one HTTP request | never |
+| Keychain items `Claude Code-credentials*` (via `security find-generic-password`) — one per Claude account | poll (default 120 s, floor 60 s) | duration of one HTTP request | never |
 | `~/.codex/auth.json` | poll | duration of one HTTP request | never |
 | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (copied read-only, WAL-immutable) | poll | duration of one HTTP request | never |
 | `~/.config/github-copilot/apps.json` / `hosts.json` | poll | duration of one HTTP request | never |
+
+Discovery is attribute-only (via `SecItemCopyMatching` without
+`kSecReturnData`) and filters out Keychain items whose `acct` attribute
+isn't a plausible user identifier — so unrelated Apple items that happen
+to share the `Claude Code-credentials` prefix (Handoff keys, etc.) are
+never treated as accounts.
+
+The **only** thing UsageBar caches across polls is the account email
+returned by the profile endpoint (kept in-memory for up to 30 min per
+account to halve request load). No tokens are ever cached.
 
 Preferences stored under `com.magicmirrorsecurity.usagebar` in
 `UserDefaults` are non-sensitive: which providers are enabled, refresh

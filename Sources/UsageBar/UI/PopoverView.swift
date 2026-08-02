@@ -196,70 +196,82 @@ private struct ProviderContent: View {
     let status: ProviderStatus?
     let isActive: Bool
 
+    private var health: UsageStore.ProviderHealth { store.health(for: provider.id) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(store.effectiveDisplayName(for: provider))
-                        .font(.system(.body).weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if isActive {
-                        Text("· in menu bar")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if !isActive, case .some(.available) = status {
-                        Button("Show in menu bar") { store.setActive(provider.id) }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                    }
-                }
-                // If the user gave this account a nickname, show the real
-                // email as a subtitle so they know what's underneath.
-                if store.customLabel(for: provider.id) != nil,
-                   let email = store.accountLabel(for: provider.id) {
-                    Text(email)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
+            headerRow
+            windowsOrPlaceholder
+        }
+    }
 
-            switch status {
-            case .some(.available(let snap)):
-                if snap.windows.isEmpty {
-                    Text("no active windows")
+    private var headerRow: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text(store.effectiveDisplayName(for: provider))
+                    .font(.system(.body).weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isActive {
+                    Text("· in menu bar")
                         .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    ForEach(snap.windows) { w in
-                        WindowBar(window: w,
-                                  isMenuBarMetric: isActive
-                                    && store.menuBarWindowID == w.id)
-                    }
                 }
-                if snap.isStale {
-                    Text("stale data")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
+                Spacer()
+                inlineAction
+            }
+            if store.customLabel(for: provider.id) != nil,
+               let email = store.accountLabel(for: provider.id) {
+                Text(email)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
 
-            case .some(.notAvailable(let reason)):
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(reason).font(.caption).foregroundStyle(.secondary)
-                    Text(provider.signInAction.hint)
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Button(provider.signInAction.buttonLabel) {
-                        store.signIn(providerID: provider.id)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
+    /// A single small text-button on the right of the header when the
+    /// account needs the user's attention.  No colored banners — we don't
+    /// want to make transient issues look like the app is broken.
+    @ViewBuilder
+    private var inlineAction: some View {
+        switch health {
+        case .ok:
+            if !isActive {
+                Button("Show in menu bar") { store.setActive(provider.id) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+        case .notSignedIn:
+            Button(provider.signInAction.buttonLabel) {
+                store.signIn(providerID: provider.id)
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+        case .authExpired:
+            Button("Reconnect") { store.signIn(providerID: provider.id) }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .checking, .rateLimited, .otherError:
+            EmptyView()
+        }
+    }
 
-            case .some(.error(let msg)):
-                Text(msg).font(.caption).foregroundStyle(.red)
-
-            case .none:
-                Text("loading…").font(.caption).foregroundStyle(.secondary)
+    /// Whenever we have snapshot data — even stale — show it.  Rate limits
+    /// and transient errors keep the last-known windows visible; only the
+    /// "no data ever" states show a placeholder.
+    @ViewBuilder
+    private var windowsOrPlaceholder: some View {
+        if case .some(.available(let snap)) = status, !snap.windows.isEmpty {
+            ForEach(snap.windows) { w in
+                WindowBar(window: w,
+                          isMenuBarMetric: isActive
+                            && store.menuBarWindowID == w.id)
+            }
+        } else if case .checking = health {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -349,6 +361,20 @@ private struct SettingsView: View {
 
                 Divider()
 
+                if let err = store.lastDeleteError {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(err).font(.caption)
+                        Spacer()
+                        Button("Dismiss") { store.lastDeleteError = nil }
+                            .buttonStyle(.borderless).font(.caption)
+                    }
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.orange.opacity(0.15)))
+                }
+
                 // Providers, grouped by kind -----------------------------
                 Text("Providers").font(.subheadline).foregroundStyle(.secondary)
                 ProvidersSection()
@@ -380,7 +406,16 @@ private struct SettingsView: View {
                 // Refresh -----------------------------------------------
                 Text("Refresh interval: \(Int(store.refreshInterval))s")
                     .font(.subheadline).foregroundStyle(.secondary)
-                Slider(value: $store.refreshInterval, in: 30...300, step: 15)
+                Slider(value: $store.refreshInterval,
+                       in: UsageStore.minRefreshInterval...600,
+                       step: 30)
+                Text("Anthropic and OpenAI rate-limit around 30s intervals with multiple accounts — 60s is the floor.")
+                    .font(.caption2).foregroundStyle(.secondary)
+
+                Divider()
+
+                // Diagnostics ------------------------------------------
+                DiagnosticsSection()
             }
         }
         .frame(maxHeight: 520)
@@ -391,6 +426,58 @@ private struct SettingsView: View {
             get: { store.activeProviderID },
             set: { store.setActive($0) }
         )
+    }
+}
+
+// MARK: - Diagnostics
+
+private struct DiagnosticsSection: View {
+    @EnvironmentObject var store: UsageStore
+    @State private var showReport = false
+    @State private var copyConfirm = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Diagnostics")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(store.diagnosticsReport(), forType: .string)
+                    copyConfirm = true
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        copyConfirm = false
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: copyConfirm ? "checkmark" : "doc.on.doc")
+                        Text(copyConfirm ? "Copied!" : "Copy diagnostics")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                Button(showReport ? "Hide" : "Show") { showReport.toggle() }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+            Text("If something looks wrong, paste this into an issue and I'll know exactly what UsageBar sees. No tokens or credentials are included.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            if showReport {
+                ScrollView {
+                    Text(store.diagnosticsReport())
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: 220)
+                .background(RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.gray.opacity(0.15)))
+            }
+        }
     }
 }
 
@@ -417,6 +504,9 @@ private struct ProvidersSection: View {
     }
 
     private func instances(prefix: String) -> [UsageProvider] {
+        // Settings shows every provider the registry knows about — even
+        // broken extras hidden from the tab bar — so the user can manage
+        // and delete them.
         store.registry.providers.filter {
             $0.id == prefix || $0.id.hasPrefix("\(prefix):")
         }
@@ -456,28 +546,42 @@ private struct AccountRow: View {
                 }
                 Spacer()
                 if isClaude {
-                    Button {
-                        confirmingDelete = true
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help(isDefaultClaude
-                          ? "Delete this account (signs you out of Claude Code!)"
-                          : "Delete this account's Keychain entry")
-                    .confirmationDialog(
-                        deleteDialogTitle,
-                        isPresented: $confirmingDelete
-                    ) {
-                        Button("Delete", role: .destructive) {
+                    if confirmingDelete {
+                        Button("Cancel") { confirmingDelete = false }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                        Button {
                             store.deleteClaudeAccount(providerID: provider.id)
+                            confirmingDelete = false
+                        } label: {
+                            Text(isDefaultClaude ? "Sign out" : "Delete")
+                                .font(.caption.weight(.semibold))
                         }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text(deleteDialogMessage)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                        .controlSize(.small)
+                    } else {
+                        Button {
+                            confirmingDelete = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isDefaultClaude
+                              ? "Delete this account (signs you out of Claude Code!)"
+                              : "Delete this account's Keychain entry")
                     }
                 }
+            }
+            if confirmingDelete {
+                Text(isDefaultClaude
+                     ? "Signs you out of Claude Code on this Mac. You'll have to run `claude` to sign back in."
+                     : "Permanently removes this account's Keychain entry.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 20)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let email = store.accountLabel(for: provider.id),
                store.customLabel(for: provider.id) != nil {
@@ -507,18 +611,6 @@ private struct AccountRow: View {
         return "e.g. Work"
     }
 
-    private var deleteDialogTitle: String {
-        isDefaultClaude
-            ? "Sign out of Claude Code?"
-            : "Delete this Claude Code account?"
-    }
-
-    private var deleteDialogMessage: String {
-        if isDefaultClaude {
-            return "Removes the Keychain entry for your primary Claude Code install. Claude Code will be signed out in every editor and terminal that uses this Mac — you'll have to run `claude` and sign in again next time you want to use it."
-        }
-        return "Removes the Keychain entry. This won't sign you out of Claude Code in any editor you're actively using it in — you can sign back in from the CLI any time."
-    }
 }
 
 /// One provider kind and its detected instances.  Instances come from disk —

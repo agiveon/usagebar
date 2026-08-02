@@ -60,21 +60,27 @@ struct ClaudeCodeProvider: UsageProvider {
             throw ProviderError.tokenMissing
         }
 
-        // Kick both requests in parallel — profile is cheap, and we want the
-        // account email to land in the same snapshot as the usage numbers.
+        // Cache the email for 30 min — halves our request count and keeps
+        // Anthropic's rate limiter happy.  Only fetch profile when the
+        // cache is empty or stale.
+        let cached = await ProfileCache.shared.get(id)
         async let usageData = self.getJSON(url: usageURL, token: token)
-        async let profileData = try? self.getJSON(url: profileURL, token: token)
+        async let profileData: Data? = {
+            if cached != nil { return nil }
+            return try? await self.getJSON(url: profileURL, token: token)
+        }()
 
         let usage = try await usageData
         let windows = try ClaudeUsageParser.parseWindows(data: usage)
 
-        var email: String?
-        if let data = await profileData,
+        var email: String? = cached
+        if email == nil, let data = await profileData,
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let account = obj["account"] as? [String: Any] {
             email = (account["email"] as? String)
                 ?? (account["display_name"] as? String)
                 ?? (account["full_name"] as? String)
+            if let e = email { await ProfileCache.shared.set(id, email: e) }
         }
 
         return UsageSnapshot(provider: id,
