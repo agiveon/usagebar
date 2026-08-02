@@ -24,10 +24,10 @@ jobs:
 
       - name: Verify bundle
         run: |
-          test -f .build/UsageBar.app/Contents/MacOS/UsageBar
-          test -f .build/UsageBar.app/Contents/Info.plist
-          test -f .build/UsageBar.app/Contents/Resources/Icons/claude.svg
-          test -f .build/UsageBar.app/Contents/Resources/Icons/openai.svg
-          test -f .build/UsageBar.app/Contents/Resources/Icons/cursor.svg
-          test -f .build/UsageBar.app/Contents/Resources/Icons/githubcopilot.svg
-          file .build/UsageBar.app/Contents/MacOS/UsageBar
+          test -f dist/UsageBar.app/Contents/MacOS/UsageBar
+          test -f dist/UsageBar.app/Contents/Info.plist
+          test -f dist/UsageBar.app/Contents/Resources/Icons/claude.svg
+          test -f dist/UsageBar.app/Contents/Resources/Icons/openai.svg
+          test -f dist/UsageBar.app/Contents/Resources/Icons/cursor.svg
+          test -f dist/UsageBar.app/Contents/Resources/Icons/githubcopilot.svg
+          file dist/UsageBar.app/Contents/MacOS/UsageBar
