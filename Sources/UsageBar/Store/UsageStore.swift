@@ -23,6 +23,7 @@ final class UsageStore: ObservableObject {
     @AppStorage("disabledProviderIDs") private var disabledIDsRaw: String = ""
     @AppStorage("refreshIntervalSeconds") var refreshInterval: Double = 120
     @AppStorage("showPercentLabel") var showPercentLabel: Bool = true
+    @AppStorage("showAllProvidersInMenuBar") var showAllProvidersInMenuBar: Bool = false
     /// User-chosen nicknames per provider id, JSON-encoded.
     @AppStorage("customLabels") private var customLabelsRaw: String = "{}"
 
@@ -324,12 +325,33 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Menu bar metric
 
-    var menuBarPercent: Double? {
-        guard case .some(.available(let snap)) = activeStatus else { return nil }
-        if menuBarWindowID == MenuBarWorstMetric || menuBarWindowID.isEmpty {
-            return snap.worstPercent
+    var menuBarPercent: Double? { menuBarPercent(for: activeProviderID) }
+
+    /// Percent driving the glyph color/label for one provider.  The active
+    /// provider honors the user's chosen metric; every other provider shown
+    /// in the menu bar falls back to its worst window.
+    func menuBarPercent(for providerID: String) -> Double? {
+        guard case .some(.available(let snap)) = statuses[providerID] else { return nil }
+        if providerID == activeProviderID,
+           menuBarWindowID != MenuBarWorstMetric, !menuBarWindowID.isEmpty {
+            return snap.windows.first { $0.id == menuBarWindowID }?.percentUsed
         }
-        return snap.windows.first { $0.id == menuBarWindowID }?.percentUsed
+        return snap.worstPercent
+    }
+
+    /// Providers whose glyphs appear in the menu bar — all enabled ones when
+    /// the user opts in, otherwise just the active provider.
+    var menuBarProviders: [UsageProvider] {
+        if showAllProvidersInMenuBar { return enabledProviders }
+        return registry.provider(id: activeProviderID).map { [$0] } ?? []
+    }
+
+    /// @AppStorage doesn't feed objectWillChange, so the menu bar label
+    /// wouldn't notice the toggle until the next poll — nudge it manually.
+    var showAllProvidersBinding: Binding<Bool> {
+        Binding(get: { self.showAllProvidersInMenuBar },
+                set: { self.showAllProvidersInMenuBar = $0
+                       self.objectWillChange.send() })
     }
 
     var activeProviderWindows: [UsageWindow] {
@@ -427,6 +449,7 @@ final class UsageStore: ObservableObject {
         out.append("menuBarWindowID:       \(menuBarWindowID)")
         out.append("refreshInterval:       \(Int(refreshInterval))s")
         out.append("showPercentLabel:      \(showPercentLabel)")
+        out.append("showAllProvidersInMenuBar: \(showAllProvidersInMenuBar)")
         out.append("disabledProviderIDs:   \(disabledIDsRaw.isEmpty ? "(none)" : disabledIDsRaw)")
 
         out.append("")
