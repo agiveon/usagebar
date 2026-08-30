@@ -113,7 +113,7 @@ final class UsageStore: ObservableObject {
         var labels = customLabels
         let looksLikeProviderID: (String) -> Bool = { key in
             key.contains(":")
-                || ["claude-code","codex","cursor","copilot"].contains(key)
+                || ["claude-code","codex","cursor","copilot","supergrok","grok-api"].contains(key)
         }
         let candidates = Set(labels.keys.filter(looksLikeProviderID))
         let ghosts = candidates.subtracting(liveIDs)
@@ -359,6 +359,20 @@ final class UsageStore: ObservableObject {
     // MARK: - Sign-in
 
     func signIn(providerID: String) {
+        let prefix = kindPrefix(providerID)
+        if prefix == "supergrok" {
+            GrokCLILogin.launch()
+            Task { await pollUntilAvailable(providerID: providerID) }
+            return
+        }
+        if prefix == "grok-api" {
+            SignInLauncher.perform(SignInAction.openURL(
+                URL(string: "https://console.x.ai/team/default/api-keys")!,
+                hint: "Create an API key in the xAI console."
+            ))
+            Task { await pollUntilAvailable(providerID: providerID) }
+            return
+        }
         guard let p = registry.provider(id: providerID) else { return }
         SignInLauncher.perform(p.signInAction)
         // OAuth in the browser typically takes 15–30 s.  Poll every 3 s for
@@ -388,6 +402,12 @@ final class UsageStore: ObservableObject {
 
     var addableKinds: [AddableKind] {
         [
+            AddableKind(id: "grok-api", title: "Grok API",
+                        iconAsset: "xai", sfSymbol: "key",
+                        subtitle: "Prepaid credits from console.x.ai."),
+            AddableKind(id: "supergrok", title: "SuperGrok",
+                        iconAsset: "xai", sfSymbol: "sparkle",
+                        subtitle: "Weekly SuperGrok / Grok Build allowance."),
             AddableKind(id: "claude", title: "Claude Code",
                         iconAsset: "claude", sfSymbol: "sparkles",
                         subtitle: "Sign in via browser."),
@@ -420,6 +440,23 @@ final class UsageStore: ObservableObject {
 
         if kindID == "claude" {
             beginAddClaudeAccount()
+            return
+        }
+        if kindID == "supergrok" {
+            // Never AppleScript Terminal for Grok — `grok login --oauth`
+            // opens the browser itself when spawned as a process.
+            if GrokCredentials.load() == nil {
+                GrokCLILogin.launch()
+            }
+            Task { await pollUntilAvailable(providerID: "supergrok") }
+            return
+        }
+        if kindID == "grok-api" {
+            SignInLauncher.perform(SignInAction.openURL(
+                URL(string: "https://console.x.ai/team/default/api-keys")!,
+                hint: "Create an API key in the xAI console."
+            ))
+            Task { await pollUntilAvailable(providerID: "grok-api") }
             return
         }
 
@@ -768,6 +805,8 @@ final class UsageStore: ObservableObject {
         case "codex":       return "not signed in to \(provider.displayName)"
         case "cursor":      return "not signed in to Cursor (or Cursor.app not installed)"
         case "copilot":     return "no GitHub Copilot token found for \(provider.displayName)"
+        case "supergrok":   return "not signed in to SuperGrok — run grok login"
+        case "grok-api":    return "no XAI_API_KEY found — add one at console.x.ai"
         default:            return "not available"
         }
     }

@@ -75,6 +75,11 @@ final class ProviderRegistry: ObservableObject {
         // Copilot — one per apps.json entry.
         list.append(contentsOf: CopilotProvider.discover())
 
+        // SuperGrok (consumer weekly pool) + Grok API (prepaid developer
+        // credits).  Separate products, separate auth — see each file.
+        list.append(SuperGrokProvider())
+        list.append(GrokAPIProvider())
+
         providers = list
         objectWillChange.send()
     }

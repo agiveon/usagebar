@@ -38,6 +38,15 @@ implementation:
   [cjdcordeiro/copilot-usage-tray-icon](https://github.com/cjdcordeiro/copilot-usage-tray-icon)
   (`copilot-tray.py::_extract_percent_remaining`).
 
+- **SuperGrok / Grok API** — `~/.grok/auth.json` OIDC layout, CLI-proxy
+  `GET /v1/billing?format=credits` (`creditUsagePercent`, `currentPeriod`,
+  `productUsage`, `prepaidBalance`), and `x-xai-token-auth: xai-grok-cli`
+  headers confirmed against
+  [ColumbusLabs/QuotaKit](https://github.com/ColumbusLabs/QuotaKit)
+  (`docs/grok.md`) and the live Grok CLI proxy. SuperGrok is the consumer
+  weekly pool; Grok API is prepaid developer credits — they are not the
+  same bill.
+
 Every one of these was consulted only for endpoint URLs, auth mechanics,
 and response fields — no code was copied.
 
@@ -57,6 +66,8 @@ respective owners:
   [simple-icons](https://simpleicons.org).
 - `githubcopilot.svg` — GitHub Copilot, GitHub, Inc. / Microsoft.
   Sourced from [simple-icons](https://simpleicons.org).
+- `xai.svg` — xAI / Grok. Nominative use of a simplified mark to identify
+  SuperGrok and the Grok API. xAI is a trademark of xAI.
 
 The [simple-icons](https://github.com/simple-icons/simple-icons) project
 itself is CC0-licensed; the marks it distributes remain the property of
