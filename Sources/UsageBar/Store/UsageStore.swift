@@ -388,12 +388,6 @@ final class UsageStore: ObservableObject {
 
     var addableKinds: [AddableKind] {
         [
-            AddableKind(id: "grok-api", title: "Grok API",
-                        iconAsset: nil, sfSymbol: "key",
-                        subtitle: "Prepaid credits from console.x.ai."),
-            AddableKind(id: "supergrok", title: "SuperGrok",
-                        iconAsset: nil, sfSymbol: "sparkle",
-                        subtitle: "Weekly SuperGrok / Grok Build allowance."),
             AddableKind(id: "claude", title: "Claude Code",
                         iconAsset: "claude", sfSymbol: "sparkles",
                         subtitle: "Sign in via browser."),
@@ -407,6 +401,12 @@ final class UsageStore: ObservableObject {
                         iconAsset: "githubcopilot",
                         sfSymbol: "chevron.left.forwardslash.chevron.right",
                         subtitle: "Sign in via your editor's Copilot extension."),
+            AddableKind(id: "grok-api", title: "Grok API",
+                        iconAsset: nil, sfSymbol: "key",
+                        subtitle: "Prepaid credits from console.x.ai. Save the key to ~/.xai/api_key."),
+            AddableKind(id: "supergrok", title: "SuperGrok",
+                        iconAsset: nil, sfSymbol: "sparkle",
+                        subtitle: "Sign in with `grok login` in Terminal."),
         ]
     }
 
@@ -615,7 +615,8 @@ final class UsageStore: ObservableObject {
             }
             switch statuses[p.id] {
             case .some(.available(let snap)):
-                out.append("    status:       available (\(snap.windows.count) windows, worst=\(Int(snap.worstPercent * 100))%)\(snap.isStale ? " STALE" : "")")
+                let worst = snap.worstPercent.map { "worst=\(Int($0 * 100))%" } ?? "no windows"
+                out.append("    status:       available (\(snap.windows.count) windows, \(worst))\(snap.isStale ? " STALE" : "")")
             case .some(.notAvailable(let hint)):
                 out.append("    status:       notAvailable — \(hint)")
             case .some(.error(let msg)):
@@ -775,7 +776,7 @@ final class UsageStore: ObservableObject {
         case "cursor":      return "not signed in to Cursor (or Cursor.app not installed)"
         case "copilot":     return "no GitHub Copilot token found for \(provider.displayName)"
         case "supergrok":   return "not signed in to SuperGrok — run grok login"
-        case "grok-api":    return "no XAI_API_KEY found — add one at console.x.ai"
+        case "grok-api":    return "no API key found — save one to ~/.xai/api_key"
         default:            return "not available"
         }
     }

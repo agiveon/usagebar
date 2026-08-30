@@ -9,7 +9,7 @@ struct GrokAPIProvider: UsageProvider {
     let iconName = "key"
     let signInAction = SignInAction.openURL(
         URL(string: "https://console.x.ai/team/default/api-keys")!,
-        hint: "Create an API key in the xAI console. UsageBar reads XAI_API_KEY."
+        hint: "Create an API key in the xAI console and save it to ~/.xai/api_key. Finder launches don't see XAI_API_KEY."
     )
 
     func isAvailable() async -> Bool { GrokCredentials.loadAPIKey() != nil }
@@ -28,11 +28,12 @@ struct GrokAPIProvider: UsageProvider {
         case 429: throw ProviderError.badResponse("rate limited")
         default:  throw ProviderError.badResponse("HTTP \(http.statusCode)")
         }
-        // Inference keys have no billing access; a live key is "connected".
+        // Inference keys have no billing access, so a live key is "connected"
+        // with no usage windows — don't invent a 0% gauge.
         return UsageSnapshot(provider: id,
-                             windows: [UsageWindow(id: "api", label: "API",
-                                                   percentUsed: 0, resetsAt: nil)],
+                             windows: [],
                              fetchedAt: Date(),
-                             isStale: false)
+                             isStale: false,
+                             note: "Spend lives in console.x.ai")
     }
 }

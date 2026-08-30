@@ -9,9 +9,11 @@ struct SuperGrokProvider: UsageProvider {
     let displayName = "SuperGrok"
     let shortName = "SuperGrok"
     let iconName = "sparkle"
-    let signInAction = SignInAction.openURL(
-        URL(string: "https://accounts.x.ai/sign-in")!,
-        hint: "Uses your Grok CLI login (`grok login`)."
+    // `~/.grok/auth.json` is only written by the CLI. Opening accounts.x.ai
+    // in a browser never produces it, so Connect has to run `grok login`.
+    let signInAction = SignInAction.runCommand(
+        "grok login",
+        hint: "Signs in via the Grok CLI (`grok login`). UsageBar reads ~/.grok/auth.json."
     )
 
     func isAvailable() async -> Bool { GrokCredentials.load() != nil }

@@ -54,7 +54,7 @@ so adding another provider is one small file, not a rewrite.
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (`cursorAuth/accessToken` JWT) | `cursor.com/api/usage-summary` | Auto models, Named models, Plan total, On-demand ($) |
 | GitHub Copilot | `~/.config/github-copilot/apps.json` (or legacy `hosts.json`) | `api.github.com/copilot_internal/user` | One window per `quota_snapshots` entry (Premium requests, Chat, Completions, …) |
 | SuperGrok | `~/.grok/auth.json` (Grok CLI `grok login`) | `cli-chat-proxy.grok.com/v1/billing?format=credits` | Weekly SuperGrok pool + per-product mix (Chat, Build, …) |
-| Grok API | `XAI_API_KEY` or `~/.xai/api_key` | `api.x.ai/v1/models` (key check) | Connected once a key is present; spend lives in the xAI console |
+| Grok API | `~/.xai/api_key` (or `XAI_API_KEY` when launched from a shell) | `api.x.ai/v1/models` (key check) | No usage windows — a live key is connected; spend lives in console.x.ai |
 
 New providers show up automatically for existing installs — the preference
 store keeps a *disabled* list, not an enabled one.
