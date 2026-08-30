@@ -1,0 +1,37 @@
+UsageBar
+========
+
+To install:
+
+    1. Double-click "Install UsageBar.command".
+
+    2. macOS will say "unidentified developer" the first time — that's
+       normal.  Close that dialog, then right-click (or Control-click)
+       "Install UsageBar.command" and pick "Open".  Confirm the second
+       dialog.  You only have to do this once.
+
+    3. A small window will ask you to confirm the install.  Click
+       "Install".  UsageBar will appear in your menu bar.
+
+    4. Delete this folder — you don't need it anymore.
+
+Why the extra step?
+-------------------
+
+UsageBar isn't signed with a paid Apple Developer certificate yet, so
+macOS treats it like an unknown app the first time you run it.  The
+installer script uses Apple's own `xattr` command to strip the
+download-quarantine flag from the app, which is what lets Gatekeeper
+open an ad-hoc-signed app.
+
+Once installed, launches are instant and silent — no more Terminal,
+no more dialogs.
+
+Uninstall
+---------
+
+Just drag /Applications/UsageBar.app to the Trash.  It leaves nothing
+behind except a small preferences file (com.magicmirrorsecurity.usagebar
+in ~/Library/Preferences).
+
+Source + docs: https://github.com/agiveon/usagebar
