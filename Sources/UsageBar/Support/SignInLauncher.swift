@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-// Best-effort launchers for the three SignInAction kinds.  We never enter
+// Best-effort launchers for SignInAction.  We never enter
 // credentials for the user — we just open their own sign-in surface and let
 // them do it.
 @MainActor
@@ -15,6 +15,8 @@ enum SignInLauncher {
             openApp(bundleID: bundleID, appName: appName)
         case .openURL(let url, _):
             NSWorkspace.shared.open(url)
+        case .spawnCommand(let cmd, let fallback, _):
+            spawn(cmd, fallback: fallback)
         }
     }
 
@@ -57,5 +59,40 @@ enum SignInLauncher {
                 return
             }
         }
+    }
+
+    /// Run a CLI sign-in (`grok login --oauth`) without AppleScripting
+    /// Terminal.app.  The CLI is expected to open the browser itself.
+    private static func spawn(_ cmd: String, fallback: URL?) {
+        let parts = cmd.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let name = parts.first else { return }
+        let args = Array(parts.dropFirst())
+        let exe: String?
+        if name.contains("/") {
+            let expanded = (name as NSString).expandingTildeInPath
+            exe = FileManager.default.isExecutableFile(atPath: expanded) ? expanded : nil
+        } else {
+            exe = resolveBinary(name)
+        }
+        if let exe {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: exe)
+            task.arguments = args
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            if (try? task.run()) != nil { return }
+        }
+        if let fallback { NSWorkspace.shared.open(fallback) }
+    }
+
+    private static func resolveBinary(_ name: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for path in ["\(home)/.local/bin/\(name)",
+                     "/opt/homebrew/bin/\(name)",
+                     "/usr/local/bin/\(name)"]
+        where FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+        return ShellRunner.run("/usr/bin/which", args: [name], timeout: 2)
     }
 }

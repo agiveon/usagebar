@@ -9,12 +9,16 @@ enum SignInAction: Sendable {
     case openApp(bundleID: String?, appName: String, hint: String)
     /// Open a URL in the user's default browser.
     case openURL(URL, hint: String)
+    /// Spawn `command` as a detached process (no Terminal).  `fallback` is
+    /// opened in the browser if the binary isn't on disk.
+    case spawnCommand(String, fallback: URL?, hint: String)
 
     var hint: String {
         switch self {
         case .runCommand(_, let h),
              .openApp(_, _, let h),
-             .openURL(_, let h):
+             .openURL(_, let h),
+             .spawnCommand(_, _, let h):
             return h
         }
     }
@@ -23,7 +27,7 @@ enum SignInAction: Sendable {
         switch self {
         case .runCommand:   return "Open Terminal & sign in"
         case .openApp(_, let name, _): return "Open \(name)"
-        case .openURL:      return "Open sign-in page"
+        case .openURL, .spawnCommand: return "Open sign-in page"
         }
     }
 }

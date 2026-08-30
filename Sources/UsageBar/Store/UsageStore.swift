@@ -359,20 +359,6 @@ final class UsageStore: ObservableObject {
     // MARK: - Sign-in
 
     func signIn(providerID: String) {
-        let prefix = kindPrefix(providerID)
-        if prefix == "supergrok" {
-            GrokCLILogin.launch()
-            Task { await pollUntilAvailable(providerID: providerID) }
-            return
-        }
-        if prefix == "grok-api" {
-            SignInLauncher.perform(SignInAction.openURL(
-                URL(string: "https://console.x.ai/team/default/api-keys")!,
-                hint: "Create an API key in the xAI console."
-            ))
-            Task { await pollUntilAvailable(providerID: providerID) }
-            return
-        }
         guard let p = registry.provider(id: providerID) else { return }
         SignInLauncher.perform(p.signInAction)
         // OAuth in the browser typically takes 15–30 s.  Poll every 3 s for
@@ -393,7 +379,7 @@ final class UsageStore: ObservableObject {
     /// deliberately dropped; per-service account limits are the service's
     /// concern, not ours to police.
     struct AddableKind: Identifiable {
-        let id: String       // "claude" | "codex" | "cursor" | "copilot"
+        let id: String       // "grok-api" | "supergrok" | "claude" | …
         let title: String
         let iconAsset: String?
         let sfSymbol: String
@@ -440,23 +426,6 @@ final class UsageStore: ObservableObject {
 
         if kindID == "claude" {
             beginAddClaudeAccount()
-            return
-        }
-        if kindID == "supergrok" {
-            // Never AppleScript Terminal for Grok — `grok login --oauth`
-            // opens the browser itself when spawned as a process.
-            if GrokCredentials.load() == nil {
-                GrokCLILogin.launch()
-            }
-            Task { await pollUntilAvailable(providerID: "supergrok") }
-            return
-        }
-        if kindID == "grok-api" {
-            SignInLauncher.perform(SignInAction.openURL(
-                URL(string: "https://console.x.ai/team/default/api-keys")!,
-                hint: "Create an API key in the xAI console."
-            ))
-            Task { await pollUntilAvailable(providerID: "grok-api") }
             return
         }
 

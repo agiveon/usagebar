@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mirrors GrokCreditsParser so we can lock the 0..100 percent scale.
+"""Mirrors GrokCredits so we can lock the 0..100 percent scale.
 
 creditUsagePercent 1.0 on the wire is 1% used, not 100%.
 """
@@ -44,12 +44,16 @@ assert "SuperGrokProvider()" in registry
 assert "GrokAPIProvider()" in registry
 
 add = store.split("func addProvider")[1].split("func removeProvider")[0]
-assert "GrokCLILogin.launch()" in add
 assert "SignInLauncher.perform(p.signInAction)" in add
-# Grok kinds return before the Terminal launcher.
-supergrok_block = add.split('if kindID == "supergrok"')[1].split("if kindID ==")[0]
-assert "return" in supergrok_block
-assert "SignInLauncher.perform(p.signInAction)" not in supergrok_block
+assert "GrokCLILogin" not in add
+assert 'kindID == "supergrok"' not in add
+assert 'kindID == "grok-api"' not in add
+
+usage = (root / "Sources/UsageBar/Providers/UsageProvider.swift").read_text()
+assert "spawnCommand" in usage
+super_p = (root / "Sources/UsageBar/Providers/SuperGrokProvider.swift").read_text()
+assert "spawnCommand" in super_p
+assert "runCommand" not in super_p
 
 print("ok")
 sys.exit(0)
