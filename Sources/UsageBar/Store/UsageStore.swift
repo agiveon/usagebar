@@ -35,6 +35,11 @@ final class UsageStore: ObservableObject {
     /// to wait.  This is entirely invisible to the user; the tab keeps
     /// showing whatever we last saw.
     private var backoffUntil: [String: Date] = [:]
+    /// Providers we've silently hidden after a server-side auth failure
+    /// (401 saying the token was revoked/expired even though its JWT `exp`
+    /// still looks fine).  Session-scoped — a manual Refresh clears it
+    /// and gives every account another shot.
+    private var authFailedIDs: Set<String> = []
     /// Minimum poll interval we'll ever honor.  30s used to be the floor
     /// but that reliably provokes 429 from Anthropic once you have two
     /// Claude accounts (usage + profile = 8 req/min) — 60s is polite.
@@ -152,11 +157,35 @@ final class UsageStore: ObservableObject {
     /// live behind Add Provider), but we DO show errored / rate-limited /
     /// auth-expired accounts — with a clear state indicator — because
     /// "silently missing" is worse UX than "visibly needs attention".
+    /// Providers eligible to be *visible* to the user right now — tab bar
+    /// and menu-bar glyphs.  Strict: only `.available` (i.e., last poll
+    /// returned real data) counts.  Pending/errored/rate-limited accounts
+    /// don't show up until they've proven themselves.  This is what kills
+    /// the "gray icon" ghost tabs.
     var enabledProviders: [UsageProvider] {
         let dups = duplicateProviderIDs
         return registry.providers.filter { p in
-            isConnected(p.id) && !isDisabled(p.id) && !dups.contains(p.id)
+            hasLiveData(p.id)
+                && !isDisabled(p.id)
+                && !dups.contains(p.id)
+                && !authFailedIDs.contains(p.id)
         }
+    }
+
+    /// Everything the user should be able to *manage* in Settings —
+    /// including accounts we haven't yet gotten data from.  That way a
+    /// stuck-in-checking or authfail'd account is still deletable from
+    /// the UI instead of requiring Keychain Access.app.
+    var providersForSettings: [UsageProvider] {
+        let dups = duplicateProviderIDs
+        return registry.providers.filter { p in
+            !isDisabled(p.id) && !dups.contains(p.id)
+        }
+    }
+
+    private func hasLiveData(_ id: String) -> Bool {
+        if case .some(.available) = statuses[id] { return true }
+        return false
     }
 
     /// A provider is "connected" for UX purposes iff it has credentials we
@@ -416,6 +445,11 @@ final class UsageStore: ObservableObject {
         if !hidden.isEmpty {
             disabled.subtract(hidden)
             disabledIDsRaw = disabled.sorted().joined(separator: ",")
+        }
+        // Also drop any session-scoped auth-fail hides for this kind.
+        for id in Array(authFailedIDs)
+        where id == prefix || id.hasPrefix("\(prefix):") {
+            authFailedIDs.remove(id)
         }
 
         if kindID == "claude" {
@@ -679,6 +713,11 @@ final class UsageStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
 
+        // Manual refresh clears session-scoped auth-failed hides so an
+        // account that got a spurious 401 gets another shot.  A persistent
+        // failure will immediately re-hide it.
+        authFailedIDs.removeAll()
+
         registry.rebuild()
 
         // Only poll providers not currently in a backoff window.  Registry
@@ -722,6 +761,20 @@ final class UsageStore: ObservableObject {
                 if case .available = statuses[id] { return }
                 // No prior snapshot either?  Leave whatever placeholder
                 // was there ("checking…") — don't downgrade to an error.
+                return
+            }
+            // Auth expired / revoked server-side → silently hide the
+            // provider.  A dud tab that only fails when polled is worse
+            // UX than the account just not being there.  The user can
+            // re-add via Add Provider (which clears the hide) or hit
+            // Refresh to give it another shot in case Anthropic was
+            // wrong.
+            if lower.contains("auth") {
+                authFailedIDs.insert(id)
+                statuses.removeValue(forKey: id)
+                consecutiveFailures.removeValue(forKey: id)
+                ensureActiveIsValid()
+                objectWillChange.send()
                 return
             }
             let n = (consecutiveFailures[id] ?? 0) + 1

@@ -27,6 +27,11 @@ enum ClaudeCredentials {
         /// so we don't fight ourselves against Anthropic's per-user
         /// rate-limit.  Nil if we can't read/parse the token.
         let subject: String?
+        /// The `exp` claim from this item's token — expiration timestamp.
+        /// Nil if the token isn't a decodable JWT.  Discovery skips items
+        /// whose exp is already in the past so a locally-expired token
+        /// doesn't show up as a "dud" tab that only fails when polled.
+        let expiresAt: Date?
     }
 
     /// Every `Claude Code-credentials*` Keychain service on this Mac that
@@ -60,17 +65,20 @@ enum ClaudeCredentials {
                     || svc.hasPrefix("Claude Code-credentials-") else { continue }
             let acct = item[kSecAttrAccount as String] as? String
             guard looksLikeClaudeAccount(acct) else { continue }
-            // Try to decode the JWT sub — shell to `security`, then
-            // base64url decode of the middle segment.  If it fails
-            // (Keychain denies, token malformed) we still include the
-            // item and let the poll figure it out.  Cached: the registry
-            // rebuilds on the main actor every poll cycle, and one
-            // `security -w` per item per rebuild means periodic UI
-            // freezes (5 s timeout each) and re-triggered Keychain
-            // prompts.
+            // Try to decode the JWT — shell to `security`, then base64url
+            // decode of the middle segment.  If we get an `exp` in the
+            // past, skip the item silently: a locally-expired token can
+            // only ever return 401, so it belongs behind Add Provider,
+            // not as a dud tab.  If decoding fails entirely (Keychain
+            // denies, token malformed), include the item and let the
+            // poll figure out what's wrong.
             let modified = item[kSecAttrModificationDate as String] as? Date
-            let sub = cachedSubject(service: svc, account: acct, modified: modified)
-            out.append(DiscoveredItem(service: svc, account: acct, subject: sub))
+            let decoded = cachedDecode(service: svc, account: acct, modified: modified)
+            if let exp = decoded?.expiresAt, exp < Date() { continue }
+            out.append(DiscoveredItem(service: svc,
+                                       account: acct,
+                                       subject: decoded?.subject,
+                                       expiresAt: decoded?.expiresAt))
         }
         return out.sorted { a, b in
             if a.service == "Claude Code-credentials" { return true }
@@ -79,44 +87,53 @@ enum ClaudeCredentials {
         }
     }
 
-    /// Decoded-subject cache.  Keyed by service + account + the item's
-    /// Keychain modification date, so a re-login (which rewrites the item)
-    /// naturally invalidates the entry — including cached decode failures.
-    private static let subjectCacheLock = NSLock()
-    private static var subjectCache: [String: String?] = [:]
-
-    private static func cachedSubject(service: String,
-                                      account: String?,
-                                      modified: Date?) -> String? {
-        let key = "\(service)|\(account ?? "")|\(modified?.timeIntervalSince1970 ?? 0)"
-        subjectCacheLock.lock()
-        if let hit = subjectCache[key] {
-            subjectCacheLock.unlock()
-            return hit
-        }
-        subjectCacheLock.unlock()
-
-        let sub = fromKeychain(service: service).flatMap(subjectFromJWT)
-
-        subjectCacheLock.lock()
-        // updateValue, not subscript: stores the entry even when sub is
-        // nil, so decode *failures* are cached too — otherwise a denied
-        // Keychain item would re-shell `security` every rebuild, which is
-        // exactly the freeze this cache exists to prevent.
-        subjectCache.updateValue(sub, forKey: key)
-        // Drop superseded entries for the same service so re-logins don't
-        // accumulate stale keys.
-        for k in Array(subjectCache.keys)
-        where k.hasPrefix("\(service)|") && k != key {
-            subjectCache.removeValue(forKey: k)
-        }
-        subjectCacheLock.unlock()
-        return sub
+    /// Compact result of parsing the JWT payload.  Nil field means the
+    /// claim was missing or unparseable; a nil `Decoded` return means
+    /// the whole token was unreadable.
+    struct Decoded {
+        let subject: String?
+        let expiresAt: Date?
     }
 
-    /// Decode `sub` from a JWT's payload without hitting the network.
-    /// Everything runs on-device.
-    static func subjectFromJWT(_ jwt: String) -> String? {
+    /// Decoded-JWT cache.  Keyed by service + account + the item's
+    /// Keychain modification date, so a re-login (which rewrites the
+    /// item) naturally invalidates the entry — including cached decode
+    /// failures.
+    private static let decodeCacheLock = NSLock()
+    private static var decodeCache: [String: Decoded?] = [:]
+
+    private static func cachedDecode(service: String,
+                                     account: String?,
+                                     modified: Date?) -> Decoded? {
+        let key = "\(service)|\(account ?? "")|\(modified?.timeIntervalSince1970 ?? 0)"
+        decodeCacheLock.lock()
+        if let hit = decodeCache[key] {
+            decodeCacheLock.unlock()
+            return hit
+        }
+        decodeCacheLock.unlock()
+
+        let decoded = fromKeychain(service: service).flatMap(decodeJWT)
+
+        decodeCacheLock.lock()
+        // updateValue, not subscript: stores the entry even when decoded
+        // is nil, so decode *failures* are cached too — otherwise a
+        // denied Keychain item would re-shell `security` every rebuild.
+        decodeCache.updateValue(decoded, forKey: key)
+        // Drop superseded entries for the same service so re-logins don't
+        // accumulate stale keys.
+        for k in Array(decodeCache.keys)
+        where k.hasPrefix("\(service)|") && k != key {
+            decodeCache.removeValue(forKey: k)
+        }
+        decodeCacheLock.unlock()
+        return decoded
+    }
+
+    /// Parse a JWT payload for the two claims we care about — sub (the
+    /// Anthropic user id, used for dedup) and exp (used to skip locally-
+    /// expired tokens at discovery).  Runs entirely on-device.
+    static func decodeJWT(_ jwt: String) -> Decoded? {
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var b64 = String(parts[1])
@@ -124,9 +141,15 @@ enum ClaudeCredentials {
             .replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64.append("=") }
         guard let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sub = obj["sub"] as? String, !sub.isEmpty else { return nil }
-        return sub
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let sub = (obj["sub"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let exp: Date? = {
+            if let n = obj["exp"] as? Double { return Date(timeIntervalSince1970: n) }
+            if let i = obj["exp"] as? Int { return Date(timeIntervalSince1970: TimeInterval(i)) }
+            return nil
+        }()
+        return Decoded(subject: sub, expiresAt: exp)
     }
 
     /// Reject obvious non-Claude acct patterns.  Claude Code writes an

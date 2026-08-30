@@ -658,18 +658,22 @@ private struct AccountRow: View {
 /// The new flat providers list — connected accounts + a single
 /// "Add Provider" entry point.  No kind grouping, no enable/disable
 /// checkboxes — being in the list IS being enabled.
+///
+/// Uses `providersForSettings` (not `enabledProviders`) so accounts
+/// stuck at "checking…" or auth-failed still show here — otherwise
+/// the user has no in-app way to delete a broken Keychain item.
 private struct ProvidersFlatList: View {
     @EnvironmentObject var store: UsageStore
     @State private var expandAdd = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            let connected = store.connectedProviders
-            if connected.isEmpty {
+            let list = store.providersForSettings
+            if list.isEmpty {
                 Text("No providers connected yet.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(connected, id: \.id) { p in
+                ForEach(list, id: \.id) { p in
                     AccountRow(provider: p)
                 }
             }
