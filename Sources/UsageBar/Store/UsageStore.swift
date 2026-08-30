@@ -389,10 +389,10 @@ final class UsageStore: ObservableObject {
     var addableKinds: [AddableKind] {
         [
             AddableKind(id: "grok-api", title: "Grok API",
-                        iconAsset: "xai", sfSymbol: "key",
+                        iconAsset: nil, sfSymbol: "key",
                         subtitle: "Prepaid credits from console.x.ai."),
             AddableKind(id: "supergrok", title: "SuperGrok",
-                        iconAsset: "xai", sfSymbol: "sparkle",
+                        iconAsset: nil, sfSymbol: "sparkle",
                         subtitle: "Weekly SuperGrok / Grok Build allowance."),
             AddableKind(id: "claude", title: "Claude Code",
                         iconAsset: "claude", sfSymbol: "sparkles",

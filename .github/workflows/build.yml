@@ -30,5 +30,4 @@ jobs:
           test -f dist/UsageBar.app/Contents/Resources/Icons/openai.svg
           test -f dist/UsageBar.app/Contents/Resources/Icons/cursor.svg
           test -f dist/UsageBar.app/Contents/Resources/Icons/githubcopilot.svg
-          test -f dist/UsageBar.app/Contents/Resources/Icons/xai.svg
           file dist/UsageBar.app/Contents/MacOS/UsageBar

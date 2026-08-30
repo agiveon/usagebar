@@ -503,12 +503,14 @@ private struct ProvidersSection: View {
 }
 
 /// Big, obvious "Add Provider" entry.  Collapsed = a full-width prominent
-/// button.  Expanded = a visible list of kinds (Grok API, SuperGrok, …)
-/// so the user can see the entries instead of a hidden menu + Connect
-/// that used to fire `codex login` in Terminal.
+/// button.  Expanded = a compact pulldown for choosing which provider,
+/// with a real Connect button.  Multiple accounts per provider are
+/// allowed for every kind — Cursor / Copilot's single-vs-multi story is
+/// their own concern, not ours to police.
 private struct AddProviderPanel: View {
     @EnvironmentObject var store: UsageStore
     @Binding var expanded: Bool
+    @State private var selectedKindID: String = "claude"
 
     var body: some View {
         if !expanded {
@@ -527,45 +529,34 @@ private struct AddProviderPanel: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Which provider do you want to connect?")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Provider", selection: $selectedKindID) {
+                    ForEach(store.addableKinds) { kind in
+                        Text(kind.title).tag(kind.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+
+                if let subtitle = store.addableKinds
+                    .first(where: { $0.id == selectedKindID })?.subtitle {
+                    Text(subtitle)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 HStack {
-                    Text("Which provider do you want to connect?")
-                        .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Cancel") { expanded = false }
                         .buttonStyle(.borderless)
-                        .font(.caption)
-                }
-                ForEach(store.addableKinds) { kind in
-                    Button {
-                        store.addProvider(kind: kind.id)
+                    Button("Connect") {
+                        store.addProvider(kind: selectedKindID)
                         expanded = false
-                    } label: {
-                        HStack(spacing: 8) {
-                            if let img = BrandIcon.nsImage(asset: kind.iconAsset,
-                                                            sfSymbol: kind.sfSymbol,
-                                                            color: .labelColor,
-                                                            pointSize: 16) {
-                                Image(nsImage: img)
-                            }
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(kind.title)
-                                    .font(.callout.weight(.medium))
-                                    .foregroundStyle(.primary)
-                                Text(kind.subtitle)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer()
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
             .padding(12)
