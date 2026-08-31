@@ -181,8 +181,9 @@ private struct TabButton: View {
     }
 
     private var tabColor: Color {
-        if case .some(.available(let snap)) = status, !snap.isStale {
-            return Thresholds.color(for: snap.worstPercent)
+        if case .some(.available(let snap)) = status, !snap.isStale,
+           let pct = snap.worstPercent {
+            return Thresholds.color(for: pct)
         }
         return .secondary
     }
@@ -268,11 +269,18 @@ private struct ProviderContent: View {
                           isMenuBarMetric: isActive
                             && store.menuBarWindowID == w.id)
             }
+            if let note = snap.note {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
         } else if case .checking = health {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
                 Text("Loading…").font(.caption).foregroundStyle(.secondary)
             }
+        } else if case .some(.available(let snap)) = status, let note = snap.note {
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

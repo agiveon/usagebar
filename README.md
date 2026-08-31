@@ -13,9 +13,9 @@ API key** — it reuses each service's existing sign-in (Keychain, the tool's
 own config file, or its state DB) and polls the same undocumented usage
 endpoints the tool itself hits.
 
-Supports **Claude Code**, **ChatGPT (Codex)**, **Cursor**, and **GitHub
-Copilot** in a single icon, and is designed so adding another provider is
-one small file, not a rewrite.
+Supports **Claude Code**, **ChatGPT (Codex)**, **Cursor**, **GitHub
+Copilot**, **SuperGrok**, and **Grok API** in a single icon, and is designed
+so adding another provider is one small file, not a rewrite.
 
 ---
 
@@ -53,6 +53,8 @@ one small file, not a rewrite.
 | ChatGPT · Codex | `~/.codex/auth.json` | `chatgpt.com/backend-api/wham/usage` | Primary window (5 h / daily / weekly / …), Secondary window |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (`cursorAuth/accessToken` JWT) | `cursor.com/api/usage-summary` | Auto models, Named models, Plan total, On-demand ($) |
 | GitHub Copilot | `~/.config/github-copilot/apps.json` (or legacy `hosts.json`) | `api.github.com/copilot_internal/user` | One window per `quota_snapshots` entry (Premium requests, Chat, Completions, …) |
+| SuperGrok | `~/.grok/auth.json` (Grok CLI `grok login`) | `cli-chat-proxy.grok.com/v1/billing?format=credits` | Weekly SuperGrok pool + per-product mix (Chat, Build, …) |
+| Grok API | `~/.xai/api_key` (or `XAI_API_KEY` when launched from a shell) | `api.x.ai/v1/models` (key check) | No usage windows — a live key is connected; spend lives in console.x.ai |
 
 New providers show up automatically for existing installs — the preference
 store keeps a *disabled* list, not an enabled one.
@@ -119,7 +121,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the walk-through.
 
 ## Not affiliated with
 
-Anthropic, OpenAI, Cursor Inc., GitHub / Microsoft, or WorkOS. The brand
+Anthropic, OpenAI, Cursor Inc., GitHub / Microsoft, WorkOS, or xAI. The brand
 marks in [Sources/UsageBar/Resources/Icons](Sources/UsageBar/Resources/Icons)
 belong to their respective owners; they're bundled here purely to identify
 the corresponding service in the UI.

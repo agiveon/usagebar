@@ -118,7 +118,7 @@ final class UsageStore: ObservableObject {
         var labels = customLabels
         let looksLikeProviderID: (String) -> Bool = { key in
             key.contains(":")
-                || ["claude-code","codex","cursor","copilot"].contains(key)
+                || ["claude-code","codex","cursor","copilot","supergrok","grok-api"].contains(key)
         }
         let candidates = Set(labels.keys.filter(looksLikeProviderID))
         let ghosts = candidates.subtracting(liveIDs)
@@ -408,7 +408,7 @@ final class UsageStore: ObservableObject {
     /// deliberately dropped; per-service account limits are the service's
     /// concern, not ours to police.
     struct AddableKind: Identifiable {
-        let id: String       // "claude" | "codex" | "cursor" | "copilot"
+        let id: String       // "grok-api" | "supergrok" | "claude" | …
         let title: String
         let iconAsset: String?
         let sfSymbol: String
@@ -430,6 +430,12 @@ final class UsageStore: ObservableObject {
                         iconAsset: "githubcopilot",
                         sfSymbol: "chevron.left.forwardslash.chevron.right",
                         subtitle: "Sign in via your editor's Copilot extension."),
+            AddableKind(id: "grok-api", title: "Grok API",
+                        iconAsset: nil, sfSymbol: "key",
+                        subtitle: "Prepaid credits from console.x.ai. Save the key to ~/.xai/api_key."),
+            AddableKind(id: "supergrok", title: "SuperGrok",
+                        iconAsset: nil, sfSymbol: "sparkle",
+                        subtitle: "Sign in with `grok login` in Terminal."),
         ]
     }
 
@@ -643,7 +649,8 @@ final class UsageStore: ObservableObject {
             }
             switch statuses[p.id] {
             case .some(.available(let snap)):
-                out.append("    status:       available (\(snap.windows.count) windows, worst=\(Int(snap.worstPercent * 100))%)\(snap.isStale ? " STALE" : "")")
+                let worst = snap.worstPercent.map { "worst=\(Int($0 * 100))%" } ?? "no windows"
+                out.append("    status:       available (\(snap.windows.count) windows, \(worst))\(snap.isStale ? " STALE" : "")")
             case .some(.notAvailable(let hint)):
                 out.append("    status:       notAvailable — \(hint)")
             case .some(.error(let msg)):
@@ -821,6 +828,8 @@ final class UsageStore: ObservableObject {
         case "codex":       return "not signed in to \(provider.displayName)"
         case "cursor":      return "not signed in to Cursor (or Cursor.app not installed)"
         case "copilot":     return "no GitHub Copilot token found for \(provider.displayName)"
+        case "supergrok":   return "not signed in to SuperGrok — run grok login"
+        case "grok-api":    return "no API key found — save one to ~/.xai/api_key"
         default:            return "not available"
         }
     }

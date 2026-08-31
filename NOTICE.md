@@ -38,6 +38,13 @@ implementation:
   [cjdcordeiro/copilot-usage-tray-icon](https://github.com/cjdcordeiro/copilot-usage-tray-icon)
   (`copilot-tray.py::_extract_percent_remaining`).
 
+- **SuperGrok** — `~/.grok/auth.json` OIDC layout, CLI-proxy
+  `GET /v1/billing?format=credits` (`creditUsagePercent`, `currentPeriod`,
+  `productUsage`), and `x-xai-token-auth: xai-grok-cli` headers confirmed
+  against [ColumbusLabs/QuotaKit](https://github.com/ColumbusLabs/QuotaKit)
+  (`docs/grok.md`) and the live Grok CLI proxy. Grok API is a separate
+  prepaid product (`XAI_API_KEY` → `api.x.ai`); it is not this feed.
+
 Every one of these was consulted only for endpoint URLs, auth mechanics,
 and response fields — no code was copied.
 
