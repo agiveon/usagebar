@@ -57,6 +57,9 @@ sign-in button all pick it up automatically.
 
 - **Never** ask the user for an API key or password inside the app.
   Reuse an existing local sign-in or open the service's own sign-in flow.
+- Connect must create the credential this provider reads, and every
+  window must be a real number from the API. If either isn't true,
+  don't ship the provider.
 - Treat every field in the response as optional and parse defensively —
   these endpoints are undocumented and change without notice.
 - Any blocking I/O (SQLite, shell-outs, file reads) must be safe to run
